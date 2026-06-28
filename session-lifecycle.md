@@ -25,6 +25,21 @@ Agents MUST first attempt to reuse an existing session.
 
 ---
 
+## CRITICAL: Persist On First Creation
+
+The most common failure: creating a session but never writing it to the cache, so every run recreates "for the first time".
+
+Rule: **A session that is created MUST be written to the cache in the same step.** Creating a session without immediately persisting it to `/home/odoo/.cache/instploy/session.json` is a runtime contract violation.
+
+- Never print the session JSON to stdout and stop.
+- Never pipe creation through `grep` for display only.
+- Creation and cache write are a single atomic operation (see [Create Session](#create-session-exceptional-path--expensive)).
+- After creating, the agent MUST confirm the cache file exists before continuing.
+
+If the cache write is skipped, the contract is violated even if the ORM call succeeds.
+
+---
+
 ## Session Cache
 
 Deterministic cache location:
@@ -146,15 +161,30 @@ Valid?
 
 ### Create session (exceptional path — expensive)
 
-Only when cache missing, stale, or validation failed:
+Only when cache missing, stale, or validation failed. Create and persist in ONE atomic step:
 
 ```bash
-python3 /opt/instploy/instploysh/lib/odoo_create_session.py <user_id> 2>&1 | grep -o '{.*}'
+mkdir -p /home/odoo/.cache/instploy
+python3 /opt/instploy/instploysh/lib/odoo_create_session.py <user_id> 2>&1 | grep -o '{.*}' \
+  | python3 -c "import sys,json,datetime,os; \
+d=json.load(sys.stdin); \
+assert 'session_id' in d, d.get('error','no session'); \
+now=datetime.datetime.utcnow().isoformat()+'Z'; \
+d['created_at']=d['validated_at']=now; \
+p='/home/odoo/.cache/instploy/session.json'; tmp=p+'.tmp'; \
+json.dump(d, open(tmp,'w')); os.replace(tmp,p); \
+print('cache written:', p)"
 ```
 
-Write result to `/home/odoo/.cache/instploy/session.json` with `created_at` and `validated_at`.
+Then confirm the cache exists before any ORM call:
 
-ORM calls after session resolved: [jsonrpc.md](jsonrpc.md).
+```bash
+test -s /home/odoo/.cache/instploy/session.json && echo "cache OK" || echo "CACHE MISSING — contract violation"
+```
+
+The pipeline writes atomically (`tmp` then `os.replace`) so a partial file is never left. Do not run the bare `odoo_create_session.py` without this persistence pipeline.
+
+ORM calls after session resolved (read sid from cache): [jsonrpc.md](jsonrpc.md).
 
 ---
 
@@ -163,6 +193,8 @@ ORM calls after session resolved: [jsonrpc.md](jsonrpc.md).
 ### Always
 
 - Read cache before `odoo_create_session.py`.
+- On creation, write the cache in the SAME step (atomic create + persist).
+- Confirm `/home/odoo/.cache/instploy/session.json` exists after creation.
 - Reuse valid cached sessions.
 - Validate before reuse.
 - Update `validated_at` after successful validation.
@@ -170,6 +202,8 @@ ORM calls after session resolved: [jsonrpc.md](jsonrpc.md).
 
 ### Never
 
+- Create a session without immediately writing it to the cache (top violation).
+- Print session JSON to stdout as the final step instead of persisting it.
 - Generate a session per request.
 - Regenerate without validating existing cache first.
 - Ignore the session cache.
@@ -198,6 +232,8 @@ Investigation: [jsonrpc.md#investigation-priority](jsonrpc.md#investigation-prio
 
 | Violation | Regenerate as |
 |-----------|---------------|
+| Create session, never write cache (recreates every run) | Atomic create + persist; confirm file exists |
+| `... odoo_create_session.py <uid> 2>&1 \| grep -o '{.*}'` as final step | Pipe into the persistence command in [Create Session](#create-session-exceptional-path--expensive) |
 | `odoo_create_session.py` on every ORM call | Read cache → validate → reuse |
 | Skip validation of cached session | Validate with `search_count` first |
 | New session without deleting invalid cache | Delete cache, then create once |
@@ -217,9 +253,11 @@ Normal path (reuse):
 
 Exceptional path (create):
 
-- Cache written with all schema fields
+- `test -s /home/odoo/.cache/instploy/session.json` succeeds (file written, non-empty)
+- Cache contains all schema fields including `created_at` / `validated_at`
 - Validation succeeds after create
 - JSON-RPC ORM call succeeds
+- Next operation reuses the cache (does NOT recreate)
 
 ---
 
