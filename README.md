@@ -18,7 +18,8 @@ npx skills add https://github.com/InstPloy/instploy_skill --skill instploy-odoo-
 |------|------|
 | `SKILL.md` | Entry: activation, philosophy, canonical APIs, violations, trees |
 | `postgresql.md` | PostgreSQL runtime contract |
-| `jsonrpc.md` | Session + JSON-RPC runtime contract |
+| `jsonrpc.md` | JSON-RPC ORM contract |
+| `session-lifecycle.md` | Session cache, reuse, validation |
 | `odoo-runtime.md` | Odoo shell, modules, import |
 | `services.md` | Supervisor runtime contract |
 | `networking.md` | Nginx runtime contract |

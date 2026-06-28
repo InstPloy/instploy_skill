@@ -69,7 +69,7 @@ Aliases from `/etc/profile.d/instploy.sh`: `tail-odoo`, `tail-manager`, `tail-st
 | Odoo won't start | `odoo-error.log` → `odoo-bin-wrapper.log` → `odoo.log` → `startup.log` |
 | Install/upgrade fail | operation output → `odoo.log` → `odoo-bin-wrapper.log` → `startup.log` |
 | HTTP 502 | `odoo-error.log` → `nginx-error.log` |
-| Session fail | `manager.log` |
+| Session fail | `session-lifecycle.md` cache → validation → [jsonrpc.md](jsonrpc.md) → `manager.log` |
 | Addons missing | `startup.log` |
 | Restart issues | `startup.log` → supervisor stderr → `odoo.log` → wrapper → infrastructure |
 

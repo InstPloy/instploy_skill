@@ -32,7 +32,7 @@ InstPloy provides **canonical runtime wrappers**. The runtime owns configuration
 | Domain | Canonical | Violation |
 |--------|-----------|-----------|
 | PostgreSQL | `psql` | `psql -h ...`, connection strings |
-| Session | `odoo_create_session.py` | `/web/session/authenticate`, XML-RPC |
+| Session | Cache → validate → reuse; `odoo_create_session.py` only if missing/invalid | `/web/session/authenticate`, XML-RPC, per-request create |
 | ORM over HTTP | JSON-RPC `/web/dataset/call_kw` + cookie | XML-RPC, password auth |
 | Restart | `instploysh-restart http` | `supervisorctl restart odooA`, `kill -9` |
 | Module upgrade | `odoo-update` | `odoo-bin -u` (except catalog refresh) |
@@ -73,7 +73,8 @@ Master reference. Subsystem contracts expand each row.
 | Task | Canonical API | Alternative (limited) | Forbidden |
 |------|---------------|----------------------|-----------|
 | Database access | `psql` / `psql -c` | `psql <other_db>` (same server) | `-h`, `-p`, `-U`, `-d`, `postgresql://`, manual creds |
-| Session creation | `odoo_create_session.py` | — | `/web/session/authenticate`, XML-RPC auth, password guess |
+| Session obtain | Read `/home/odoo/.cache/instploy/session.json` → validate → reuse | Create without cache check |
+| Session create | `odoo_create_session.py` (only if cache missing/invalid) | Per-request create; password auth |
 | ORM over HTTP | JSON-RPC `/web/dataset/call_kw` + `session_id` cookie | — | XML-RPC, password `/jsonrpc` |
 | Module upgrade | `odoo-update <mod>` | — | `odoo-bin -u` (except `odoo-bin -u base` for catalog) |
 | Module install | `odoo-bin -i <mod> --stop-after-init --logfile=` | — | Manual SQL module install |
@@ -108,9 +109,10 @@ If the agent generates any forbidden pattern → **stop**, classify as violation
 | `kill -9` / `systemctl` | Bypasses Supervisor | `instploysh-restart` or `supervisorctl` |
 | Manual `--addons-path` | Runtime resolves paths | `grep addons-path startup.log` |
 | Manual DB credentials in commands | Runtime owns creds | `psql` |
-| `echo $POSTGRES_PASSWORD` | Secret exposure | `test -n "$POSTGRES_PASSWORD"` only |
+| `odoo_create_session.py` without cache check | Expensive; violates reuse policy | Read cache → validate → reuse |
+| New session every JSON-RPC call | Wastes runtime | [session-lifecycle.md](session-lifecycle.md) |
 
-Subsystem violation catalogs: [postgresql.md](postgresql.md#anti-patterns) · [jsonrpc.md](jsonrpc.md#anti-patterns) · [services.md](services.md#anti-patterns)
+Subsystem violation catalogs: [postgresql.md](postgresql.md#anti-patterns) · [jsonrpc.md](jsonrpc.md#anti-patterns) · [session-lifecycle.md](session-lifecycle.md#anti-patterns) · [services.md](services.md#anti-patterns)
 
 ---
 
@@ -136,7 +138,7 @@ Need Odoo data?
    │  └─ Access type?
    │     ├─ SQL → psql -c
    │     ├─ ORM in-process → odoo-bin shell
-   │     ├─ ORM over HTTP → odoo_create_session.py → session_id → JSON-RPC call_kw
+   │     ├─ ORM over HTTP → read session cache → validate → reuse OR create → JSON-RPC call_kw
    │     ├─ Browser → session_id cookie
    │     └─ Notebook → /instploy/editor/
    └─ NO (outside container) → out of scope; user must specify external auth
@@ -201,6 +203,7 @@ Playbooks include per-operation verification: [playbooks.md](playbooks.md)
 |-----------|---------------|
 | PostgreSQL | [postgresql.md](postgresql.md) |
 | JSON-RPC / Sessions | [jsonrpc.md](jsonrpc.md) |
+| Session lifecycle (cache/reuse) | [session-lifecycle.md](session-lifecycle.md) |
 | Odoo runtime (shell, modules) | [odoo-runtime.md](odoo-runtime.md) |
 | Supervisor | [services.md](services.md) |
 | Nginx | [networking.md](networking.md) |

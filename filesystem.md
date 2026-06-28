@@ -26,6 +26,7 @@
 | `/home/odoo/data/sessions/` | HTTP sessions |
 | `/home/odoo/.config/odoo/odoo.conf` | Odoo config (runtime-managed) |
 | `/opt/instploy/instploysh/bin/` | Canonical CLI wrappers |
+| `/home/odoo/.cache/instploy/session.json` | Session cache ([session-lifecycle.md](session-lifecycle.md)) |
 | `/opt/extra-packages` | Pip installs |
 
 Full tree: see directory layout in prior reference — do not duplicate mount tables elsewhere.

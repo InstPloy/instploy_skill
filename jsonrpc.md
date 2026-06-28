@@ -11,9 +11,9 @@
 | Environment | InstPloy Odoo Container |
 | Supported interface | `odoo_create_session.py` → `session_id` cookie → `/web/dataset/call_kw` |
 | Unsupported | `/web/session/authenticate`, XML-RPC, password `/jsonrpc`, login pages |
-| Golden rule | Sessions are passwordless; ORM uses JSON-RPC with cookie only |
-| Decision rule | Need ORM over HTTP → session script → cookie → call_kw |
-| Failure rule | Never fall back to password auth; fix session or report runtime failure |
+| Golden rule | Sessions are passwordless; reuse cached session when valid |
+| Decision rule | [session-lifecycle.md](session-lifecycle.md) first; then JSON-RPC call_kw |
+| Failure rule | Never fall back to password auth; never create session without cache check |
 
 ---
 
@@ -28,20 +28,28 @@ Inside InstPloy: agents MUST NOT use `/web/session/authenticate`, login pages, X
 
 ---
 
-## Canonical Workflow
+## Session Resolution (mandatory first step)
+
+Before any JSON-RPC call, follow [session-lifecycle.md](session-lifecycle.md):
+
+1. Read `/home/odoo/.cache/instploy/session.json`
+2. Validate cached `session_id` (or create if missing/invalid)
+3. Reuse validated session for all `call_kw` requests in the same operation cycle
+
+Do NOT call `odoo_create_session.py` until cache read and validation complete.
+
+---
+
+## Canonical Workflow (after session resolved)
 
 ```
 psql -c "SELECT id, login FROM res_users WHERE active LIMIT 10;"
         ↓
-python3 /opt/instploy/instploysh/lib/odoo_create_session.py <uid> 2>&1 | grep -o '{.*}'
-        ↓
-Extract session_id
+[session-lifecycle.md] read cache → validate → reuse OR create once
         ↓
 Cookie: session_id=<sid>
         ↓
 POST /web/dataset/call_kw (JSON-RPC body)
-        ↓
-Verify: /web/session/get_session_info
 ```
 
 ### Step 1 — Resolve user id
@@ -52,7 +60,13 @@ psql -c "SELECT id, login FROM res_users WHERE active AND share=false ORDER BY i
 
 Never assume uid 2. Never guess `admin`/`admin`.
 
-### Step 2 — Create session (passwordless)
+Never assume uid 2. Never guess `admin`/`admin`.
+
+### Step 2 — Resolve session_id
+
+See [session-lifecycle.md](session-lifecycle.md). Use cached `session_id` when valid.
+
+Create only when cache missing or validation failed:
 
 ```bash
 python3 /opt/instploy/instploysh/lib/odoo_create_session.py <uid> 2>&1 | grep -o '{.*}'
@@ -62,19 +76,20 @@ Script path: `/opt/instploy/instploysh/lib/odoo_create_session.py`
 
 | Output field | Use |
 |--------------|-----|
-| `session_id` | HTTP cookie value |
+| `session_id` | HTTP cookie value; persist to cache |
 | `login` | Reference only |
 | `user_id` | Reference only |
 | `db` | Reference only |
 
 Log: `/home/odoo/logs/manager.log` (sid masked). Never print `session_id` in chat.
 
-### Step 3 — Extract sid
+### Step 3 — Extract sid (if not from cache)
 
 ```bash
-SID=$(python3 /opt/instploy/instploysh/lib/odoo_create_session.py <uid> 2>&1 | grep -o '{.*}' \
-  | python3 -c "import sys,json; print(json.load(sys.stdin)['session_id'])")
+SID=$(python3 -c "import json; print(json.load(open('/home/odoo/.cache/instploy/session.json'))['session_id'])")
 ```
+
+Or after create, write cache then read `session_id` from cache.
 
 ### Step 4 — JSON-RPC ORM call
 
@@ -109,12 +124,14 @@ Expected: JSON with uid, username, db. HTTP 200.
 
 ## Investigation Priority
 
-1. `psql -c` user exists in `res_users`
-2. `odoo_create_session.py` returns valid JSON
-3. `manager.log` if session script fails
-4. JSON-RPC response / HTTP status on `call_kw`
-5. `odoo-error.log` / `odoo.log` if Odoo unreachable
-6. Infrastructure (nginx, supervisor) if HTTP down
+1. Read session cache `/home/odoo/.cache/instploy/session.json`
+2. Validate cached session (search_count)
+3. `psql -c` user exists in `res_users`
+4. `odoo_create_session.py` only if cache invalid (once)
+5. `manager.log` if session script fails
+6. JSON-RPC response / HTTP status on `call_kw`
+7. `odoo-error.log` / `odoo.log` if Odoo unreachable
+8. Infrastructure (nginx, supervisor) if HTTP down
 
 ---
 
@@ -137,7 +154,7 @@ Expected: JSON with uid, username, db. HTTP 200.
 |---------|--------|
 | `{"error":"User with ID N not found"}` | Query `res_users`; pick valid uid |
 | Empty JSON from session script | Read `manager.log`; check `psql -c "SELECT 1;"` |
-| 401 on call_kw | Recreate session; verify cookie header |
+| 401 on call_kw | Validate cache; recreate session once per [session-lifecycle.md](session-lifecycle.md) |
 | Odoo unreachable | [troubleshooting.md](troubleshooting.md#odoo-wont-start) |
 
 Do NOT fall back to password authentication.
@@ -155,4 +172,4 @@ curl -s http://127.0.0.1/web/dataset/call_kw \
 
 Expected: session info populated; search_count returns integer.
 
-Playbook: [playbooks.md#create-session](playbooks.md#create-session)
+Playbook: [playbooks.md#create-session](playbooks.md#create-session) · Lifecycle: [session-lifecycle.md](session-lifecycle.md)

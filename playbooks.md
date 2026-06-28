@@ -111,29 +111,47 @@ psql -c "SELECT 1;"
 
 ## Create Session
 
-**Goal:** Passwordless session + JSON-RPC ORM access.
+**Goal:** Resolve reusable session (cache-first) + JSON-RPC ORM access.
 
-**Rules:** Never password auth. Never XML-RPC. See [jsonrpc.md](jsonrpc.md).
+**Rules:** [session-lifecycle.md](session-lifecycle.md) · [jsonrpc.md](jsonrpc.md). Never password auth. Never XML-RPC. Never create session without cache check.
 
 **Commands:**
 
 ```bash
+# 1. Resolve user if cache empty or user mismatch
 psql -c "SELECT id, login FROM res_users WHERE active AND share=false ORDER BY id LIMIT 10;"
-SID=$(python3 /opt/instploy/instploysh/lib/odoo_create_session.py <uid> 2>&1 | grep -o '{.*}' \
-  | python3 -c "import sys,json; print(json.load(sys.stdin)['session_id'])")
-curl -s -b "session_id=$SID" http://127.0.0.1/web/session/get_session_info | python3 -m json.tool
+
+# 2. Read cache
+CACHE=/home/odoo/.cache/instploy/session.json
+if [ -f "$CACHE" ]; then
+  SID=$(python3 -c "import json; print(json.load(open('$CACHE'))['session_id'])")
+  CODE=$(curl -s -o /dev/null -w "%{http_code}" http://127.0.0.1/web/dataset/call_kw \
+    -H "Content-Type: application/json" -b "session_id=$SID" \
+    -d '{"jsonrpc":"2.0","method":"call","params":{"model":"res.users","method":"search_count","args":[[]],"kwargs":{}}}')
+  [ "$CODE" != "200" ] && rm -f "$CACHE"
+fi
+
+# 3. Create only if cache missing/invalid
+if [ ! -f "$CACHE" ]; then
+  mkdir -p /home/odoo/.cache/instploy
+  python3 /opt/instploy/instploysh/lib/odoo_create_session.py <uid> 2>&1 | grep -o '{.*}' \
+    | python3 -c "import sys,json,datetime; d=json.load(sys.stdin); d['created_at']=d['validated_at']=datetime.datetime.utcnow().isoformat()+'Z'; json.dump(d,open('/home/odoo/.cache/instploy/session.json','w'))"
+  SID=$(python3 -c "import json; print(json.load(open('$CACHE'))['session_id'])")
+fi
+
+# 4. ORM call
 curl -s http://127.0.0.1/web/dataset/call_kw \
   -H "Content-Type: application/json" -b "session_id=$SID" \
   -d '{"jsonrpc":"2.0","method":"call","params":{"model":"res.users","method":"search_count","args":[[]],"kwargs":{}}}'
 ```
 
-**Verification:** Session info has uid; search_count returns integer.
+**Verification:** Cache exists or reused; validation HTTP 200; `search_count` returns integer.
 
-**Expected:** Valid JSON session; ORM call succeeds.
+**Expected:** Normal path: no `odoo_create_session.py` call. Exceptional path: one create, then reuse.
 
-**Failure recovery:** [jsonrpc.md#failure-handling](jsonrpc.md). Never fall back to password.
+**Failure recovery:** Delete cache → create once → validate. Second failure → [session-lifecycle.md#failure-recovery](session-lifecycle.md). Never loop.
 
-**Rollback:** N/A.
+**Rollback:** `rm -f /home/odoo/.cache/instploy/session.json`
 
 ---
 

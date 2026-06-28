@@ -134,13 +134,15 @@ Symptom-based decision trees. Logs: [logs.md](logs.md). Commands: [commands.md](
 
 ## Sessions fail
 
-**Symptoms:** `odoo_create_session.py` returns error JSON; HTTP 401 with session cookie.
+**Symptoms:** Cached session invalid; `odoo_create_session.py` fails; HTTP 401 on `call_kw`.
 
 **Decision tree:**
 
-1. `psql -c "SELECT id, login, active FROM res_users WHERE id=<uid>;"`
-2. `tail -n 30 /home/odoo/logs/manager.log`
-3. `psql -c "SELECT 1;"`
+1. Read `/home/odoo/.cache/instploy/session.json` — exists? `db`/`user_id` match?
+2. Validate with `search_count` via `call_kw` ([session-lifecycle.md](session-lifecycle.md))
+3. If invalid → delete cache → `odoo_create_session.py` once
+4. `psql -c` user exists in `res_users`
+5. `manager.log` if create script fails
 
 **Likely causes:**
 

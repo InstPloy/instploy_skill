@@ -7,7 +7,8 @@ Safety: **R** Read-only · **S** Safe · **C** Caution · **D** Destructive · *
 | Task | Command | Safety | When NOT |
 |------|---------|--------|----------|
 | DB query | `psql` / `psql -c` | R* | Never `-h/-p/-U/-d` |
-| Session | `python3 .../odoo_create_session.py <uid>` | C | Never password auth |
+| Session obtain | Read `/home/odoo/.cache/instploy/session.json` → validate | R | Never skip cache |
+| Session create | `odoo_create_session.py <uid>` (cache miss/invalid only) | C | Never per-request |
 | JSON-RPC ORM | `curl .../web/dataset/call_kw -b session_id=` | C | Never XML-RPC |
 | Upgrade module | `odoo-update <mod>` | C | Never `odoo-bin -u` |
 | Install module | `odoo-bin -i <mod> --stop-after-init --logfile=` | C | — |
