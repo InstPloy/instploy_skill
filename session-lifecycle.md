@@ -14,6 +14,7 @@ Parent: [jsonrpc.md](jsonrpc.md). Creation interface: `odoo_create_session.py` (
 | Supported | Read cache → validate → reuse; create only when missing/invalid |
 | Unsupported | New session per request; skip validation; ignore cache |
 | Golden rule | Sessions are reusable runtime resources |
+| Default user | admin, **uid 2** (no PostgreSQL lookup needed) |
 | Decision rule | Need auth → read cache first; create only if absent or invalid |
 | Failure rule | Retry session creation exactly once; then report runtime/infrastructure issue |
 
@@ -92,6 +93,8 @@ Before creating a session:
 4. If validation succeeds → reuse; update `validated_at`.
 5. If validation fails → delete cache → create new session → replace cache.
 
+Default `user_id` is **2** (admin). Do not query PostgreSQL for the user id in the normal case. Only look up `res_users` when a specific non-admin user is explicitly required.
+
 Match cache `db` to current `PGDATABASE` and `user_id` to intended user. If mismatch → discard cache.
 
 ---
@@ -136,13 +139,13 @@ Read /home/odoo/.cache/instploy/session.json
         ↓
 Session exists AND db/user_id match?
         ↓
-   NO ──────────────────────────────┐
-        ↓                          │
-Run odoo_create_session.py <uid>   │
-        ↓                          │
-Write session.json                 │
-        ↓                          │
-Continue ◄─────────────────────────┘
+   NO ────────────────────────────────────┐
+        ↓                                 │
+Run odoo_create_session.py 2 (uid 2)      │
+        ↓                                 │
+Write session.json                        │
+        ↓                                 │
+Continue ◄────────────────────────────────┘
         ↑
    YES ─┘
         ↓
@@ -152,12 +155,14 @@ Valid?
    YES → Reuse → update validated_at → Continue
    NO  → Delete session.json
               ↓
-         Run odoo_create_session.py
+         Run odoo_create_session.py 2
               ↓
          Write session.json
               ↓
          Continue
 ```
+
+Default uid is 2 (admin). Replace only if a specific user is required.
 
 ### Create session (exceptional path — expensive)
 
@@ -165,7 +170,7 @@ Only when cache missing, stale, or validation failed. Create and persist in ONE 
 
 ```bash
 mkdir -p /home/odoo/.cache/instploy
-python3 /opt/instploy/instploysh/lib/odoo_create_session.py <user_id> 2>&1 | grep -o '{.*}' \
+python3 /opt/instploy/instploysh/lib/odoo_create_session.py 2 2>&1 | grep -o '{.*}' \
   | python3 -c "import sys,json,datetime,os; \
 d=json.load(sys.stdin); \
 assert 'session_id' in d, d.get('error','no session'); \

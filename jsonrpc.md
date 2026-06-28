@@ -43,33 +43,33 @@ Do NOT call `odoo_create_session.py` until cache read and validation complete.
 ## Canonical Workflow (after session resolved)
 
 ```
-psql -c "SELECT id, login FROM res_users WHERE active LIMIT 10;"
-        ↓
-[session-lifecycle.md] read cache → validate → reuse OR create once
+[session-lifecycle.md] read cache → validate → reuse OR create once (default uid 2)
         ↓
 Cookie: session_id=<sid>
         ↓
 POST /web/dataset/call_kw (JSON-RPC body)
 ```
 
-### Step 1 — Resolve user id
+### Step 1 — User id (default admin uid 2)
+
+Default user is **admin, uid 2**. Do NOT query PostgreSQL for the user id in the normal case.
+
+Only run a `res_users` lookup when the task explicitly requires a specific non-admin user:
 
 ```bash
 psql -c "SELECT id, login FROM res_users WHERE active AND share=false ORDER BY id LIMIT 10;"
 ```
 
-Never assume uid 2. Never guess `admin`/`admin`.
-
-Never assume uid 2. Never guess `admin`/`admin`.
+Never guess login passwords (`admin`/`admin`). The session is passwordless.
 
 ### Step 2 — Resolve session_id
 
 See [session-lifecycle.md](session-lifecycle.md). Use cached `session_id` when valid.
 
-Create only when cache missing or validation failed:
+Create only when cache missing or validation failed (default uid 2):
 
 ```bash
-python3 /opt/instploy/instploysh/lib/odoo_create_session.py <uid> 2>&1 | grep -o '{.*}'
+python3 /opt/instploy/instploysh/lib/odoo_create_session.py 2 2>&1 | grep -o '{.*}'
 ```
 
 Script path: `/opt/instploy/instploysh/lib/odoo_create_session.py`

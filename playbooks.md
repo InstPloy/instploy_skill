@@ -115,14 +115,14 @@ psql -c "SELECT 1;"
 
 **Rules:** [session-lifecycle.md](session-lifecycle.md) · [jsonrpc.md](jsonrpc.md). Never password auth. Never XML-RPC. Never create session without cache check.
 
+**User:** default uid 2 (admin). No PostgreSQL lookup unless a specific non-admin user is required.
+
 **Commands:**
 
 ```bash
-# 1. Resolve user if cache empty or user mismatch
-psql -c "SELECT id, login FROM res_users WHERE active AND share=false ORDER BY id LIMIT 10;"
-
-# 2. Read cache
 CACHE=/home/odoo/.cache/instploy/session.json
+
+# 1. Read + validate cache
 if [ -f "$CACHE" ]; then
   SID=$(python3 -c "import json; print(json.load(open('$CACHE'))['session_id'])")
   CODE=$(curl -s -o /dev/null -w "%{http_code}" http://127.0.0.1/web/dataset/call_kw \
@@ -131,21 +131,22 @@ if [ -f "$CACHE" ]; then
   [ "$CODE" != "200" ] && rm -f "$CACHE"
 fi
 
-# 3. Create only if cache missing/invalid
+# 2. Create only if cache missing/invalid (default uid 2; atomic create + persist)
 if [ ! -f "$CACHE" ]; then
   mkdir -p /home/odoo/.cache/instploy
-  python3 /opt/instploy/instploysh/lib/odoo_create_session.py <uid> 2>&1 | grep -o '{.*}' \
-    | python3 -c "import sys,json,datetime; d=json.load(sys.stdin); d['created_at']=d['validated_at']=datetime.datetime.utcnow().isoformat()+'Z'; json.dump(d,open('/home/odoo/.cache/instploy/session.json','w'))"
+  python3 /opt/instploy/instploysh/lib/odoo_create_session.py 2 2>&1 | grep -o '{.*}' \
+    | python3 -c "import sys,json,datetime,os; d=json.load(sys.stdin); assert 'session_id' in d, d.get('error'); now=datetime.datetime.utcnow().isoformat()+'Z'; d['created_at']=d['validated_at']=now; tmp='$CACHE.tmp'; json.dump(d,open(tmp,'w')); os.replace(tmp,'$CACHE')"
+  test -s "$CACHE" && echo "cache OK" || echo "CACHE MISSING — contract violation"
   SID=$(python3 -c "import json; print(json.load(open('$CACHE'))['session_id'])")
 fi
 
-# 4. ORM call
+# 3. ORM call
 curl -s http://127.0.0.1/web/dataset/call_kw \
   -H "Content-Type: application/json" -b "session_id=$SID" \
   -d '{"jsonrpc":"2.0","method":"call","params":{"model":"res.users","method":"search_count","args":[[]],"kwargs":{}}}'
 ```
 
-**Verification:** Cache exists or reused; validation HTTP 200; `search_count` returns integer.
+**Verification:** Cache exists (`test -s`) or reused; validation HTTP 200; `search_count` returns integer.
 
 **Expected:** Normal path: no `odoo_create_session.py` call. Exceptional path: one create, then reuse.
 
