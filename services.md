@@ -1,74 +1,82 @@
-# Services
+# Supervisor Runtime Contract
 
-Canonical Supervisor and internal port reference.
+**Scope:** InstPloy Odoo Container — process management.
 
-## Supervisor programs
+---
 
-| Program | Command | Autostart | User | Logs |
-|---------|---------|-----------|------|------|
-| `nginx` | `/usr/sbin/nginx -g "daemon off;"` | yes | root | [logs.md](logs.md#supervisor-logs) |
-| `odooA` | `/opt/instploy/instploysh/bin/odoo-bin` | yes | odoo | supervisor/odoo.log |
-| `odooB` | `/opt/instploy/instploysh/bin/odoo-bin` | no | odoo | supervisor/odoo.log |
-| `jupyter_editor` | jupyter-lab | yes | odoo | supervisor/jupyter-editor.log |
-| `jupyter_webshell` | sh-webshell | yes | odoo | supervisor/jupyter-webshell.log |
-| `manager` | `/opt/instploy/image_manager` | yes | root | supervisor/manager.log |
-| `hermes_agent` | `/usr/local/bin/hermes-gateway` | yes | odoo | supervisor/hermes-agent.log |
+## Runtime Contract
+
+| Field | Value |
+|-------|-------|
+| Supported | `supervisorctl` (status, signal HUP), `instploysh-restart` |
+| Unsupported | `systemctl`, `kill -9`, `killall`, manual process management |
+| Golden rule | Restart Odoo HTTP via `instploysh-restart http` |
+| Decision rule | Need restart → instploysh-restart; need status → supervisorctl status |
+| Failure rule | Never kill processes; investigate logs then use canonical restart |
+
+---
+
+## Programs
+
+| Program | Port(s) | Autostart | User |
+|---------|---------|-----------|------|
+| `nginx` | 80 | yes | root |
+| `odooA` | 8069 / 8072 | yes | odoo |
+| `odooB` | 9069 / 9072 | no | odoo |
+| `jupyter_editor` | 8888 | yes | odoo |
+| `jupyter_webshell` | 8889 | yes | odoo |
+| `manager` | 5001 | yes | root |
+| `hermes_agent` | 8642 | yes | odoo |
 
 Config: `/etc/supervisor/conf.d/*.conf`
 Socket: `unix:///var/run/supervisor/supervisor.sock`
-Main config: `/etc/supervisor/supervisord.conf`
 
-## Internal ports
+Blue/green: `instploysh-restart http` swaps odooA/odooB via nginx. Never install/upgrade on odooB during swap.
 
-| Service | Program | HTTP | Gevent | User |
-|---------|---------|------|--------|------|
-| Nginx | `nginx` | 80 | — | root |
-| odooA | `odooA` | 8069 | 8072 | odoo |
-| odooB | `odooB` | 9069 | 9072 | odoo |
-| JupyterLab | `jupyter_editor` | 8888 | — | odoo |
-| Web shell | `jupyter_webshell` | 8889 | — | odoo |
-| Manager | `manager` | 5001 | — | root |
-| Hermes | `hermes_agent` | 8642 | — | odoo |
+---
 
-Port defaults and overrides: [environment.md](environment.md#port-selection-logic)
+## Canonical Operations
 
-## Blue/green (odooA / odooB)
+| Task | Canonical | Forbidden |
+|------|-----------|-----------|
+| Check status | `supervisorctl status` | `ps aux` + kill |
+| Restart HTTP | `instploysh-restart http` | `supervisorctl restart odooA` (routine) |
+| Restart cron | `instploysh-restart cron` | — |
+| Reload nginx | `supervisorctl signal HUP nginx` | `kill` nginx master |
+| After conf change | `supervisorctl reread && supervisorctl update` | Edit without reread |
 
-- `odooA`: primary, autostart, ports 8069/8072
-- `odooB`: warm-up slot, autostart=false, ports 9069/9072
-- `instploysh-restart http` orchestrates swap via nginx upstream rewrite
-- Never run install/upgrade on `odooB` during active swap
+Direct `supervisorctl restart odooA` only when user **explicitly** requests it.
 
-## supervisorctl
+---
 
-| Action | Command | Safety |
-|--------|---------|--------|
-| Status | `supervisorctl status` | Read-only |
-| Status one | `supervisorctl status odooA` | Read-only |
-| Restart Odoo | `instploysh-restart http` | Safe (preferred) |
-| Direct restart | `supervisorctl restart odooA` | Caution (brief downtime) |
-| Reload nginx | `supervisorctl signal HUP nginx` | Safe |
-| After config change | `supervisorctl reread && supervisorctl update` | Caution |
+## Investigation Priority
+
+1. `supervisorctl status`
+2. `/home/odoo/logs/supervisor/odoo-error.log`
+3. `/home/odoo/logs/startup.log`
+4. `/home/odoo/logs/odoo.log`
+5. `/home/odoo/logs/odoo-bin-wrapper.log`
+6. Infrastructure / platform
+
+---
+
+## Anti-Patterns
+
+| Violation | Why | Regenerate as |
+|-----------|-----|---------------|
+| `kill -9 <odoo-pid>` | Bypasses blue/green | `instploysh-restart http` |
+| `systemctl restart odoo` | No systemctl in container | `instploysh-restart http` |
+| `supervisorctl restart odooA` (routine) | No zero-downtime | `instploysh-restart http` |
+| `pkill -f odoo` | Destructive, no rollback | `instploysh-restart http` |
+
+---
+
+## Verification
+
+```bash
+supervisorctl status odooA    # RUNNING
+curl -s http://127.0.0.1/health
+curl -s -o /dev/null -w "%{http_code}" http://127.0.0.1:8069/web/login
+```
 
 Nginx routes: [networking.md](networking.md)
-
-## odoo-bin wrapper responsibilities
-
-- Build `--addons-path` from env
-- Inject DB credentials
-- Set ports from `odoo_port`/`chat_port`
-- Run `instploysh-sync-branch` on startup
-- Log to `/home/odoo/logs/odoo-bin-wrapper.log`
-- Exec real binary: `/home/odoo/src/odoo/odoo-bin`
-
-Special wrapper-only subcommand: `obfuscate` (staging, Odoo 16+).
-
-## Backup service
-
-| Item | Path |
-|------|------|
-| Script | `/usr/local/bin/start_backup.py` |
-| Storage | `/home/odoo/backups/` |
-| Log | `/home/odoo/logs/backup.log` |
-
-Configured via task volume JSON schedule.

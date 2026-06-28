@@ -1,6 +1,8 @@
 # PostgreSQL Runtime Contract
 
-**Scope:** InstPloy Odoo Containers
+**Scope:** InstPloy Odoo Container
+
+Parent spec: [SKILL.md](SKILL.md). Canonical API row: Database access → `psql`.
 
 This document defines the only supported way autonomous agents may access PostgreSQL inside an InstPloy Odoo container.
 
@@ -175,6 +177,17 @@ psql -c "SELECT id, login FROM res_users;"
 
 psql another_database
 ```
+
+### Diagnostic queries (via `psql -c` only)
+
+```bash
+psql -c "SELECT id, login, name, active FROM res_users WHERE active ORDER BY id;"
+psql -c "SELECT name, state, latest_version FROM ir_module_module WHERE name='<module>';"
+psql -c "SELECT latest_version FROM ir_module_module WHERE name='base';"
+psql -c "SELECT value FROM ir_config_parameter WHERE key='web.base.url';"
+```
+
+Module states: `uninstalled` · `installed` · `to install` · `to upgrade`
 
 ---
 

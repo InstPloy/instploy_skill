@@ -1,193 +1,232 @@
 ---
 name: instploy-odoo-container
 description: >-
-  Operate inside instploy Odoo Docker containers: AI behavioral rules, decision
-  trees, execution playbooks, filesystem, logs, PostgreSQL, Odoo runtime, Supervisor,
-  Nginx, and instploy wrappers. Use when debugging Odoo in instploy containers,
-  installing/upgrading modules, reading logs, obtaining credentials/sessions, or
-  restarting services.
+  InstPloy Odoo container Runtime Specification. Activates on Odoo, InstPloy,
+  PostgreSQL, Supervisor, JSON-RPC, session_id, odoo_create_session, addons,
+  module, restart, nginx, workers, Docker container, database. Overrides generic
+  Docker, PostgreSQL, Linux, Python, and Odoo knowledge. Canonical wrappers only.
 ---
 
-# instploy Odoo Container
+# InstPloy Odoo Container — Runtime Specification
 
-Operational knowledge base for autonomous agents inside instploy Odoo Docker containers.
+Authoritative operating specification for autonomous agents inside InstPloy Odoo containers.
 
-## Purpose
+**Invariant:** If InstPloy provides a wrapper or runtime interface, the agent MUST use it. Generic implementations are **runtime contract violations**.
 
-Enable agents to orient, plan, execute, verify, and recover container operations with minimal reasoning cost.
+---
 
-## Scope
+## Automatic Activation
 
-| In scope | Out of scope |
-|----------|--------------|
-| Filesystem, env vars, logs, ports, routes | Manager API auth internals |
-| instploy wrappers (`odoo-bin`, `odoo-update`, `instploysh-*`) | Hermes auth internals |
-| PostgreSQL via env credentials | Platform secret keys / branch tokens |
-| Odoo shell, sessions, module install/upgrade | Entrypoint obfuscation |
-| Supervisor, Nginx, blue/green restart | SSH key management |
-| Symptom-based troubleshooting | Reverse-engineering platform callbacks |
+This skill MUST activate when prompts mention any of:
 
-## Quick Start
+`Odoo` · `InstPloy` · `PostgreSQL` · `Supervisor` · `JSON-RPC` · `session_id` · `odoo_create_session` · `addons` · `module` · `restart` · `nginx` · `workers` · `Docker container` · `database` · `psql` · `odoo-update` · `instploysh`
 
-Run before any operation:
+This specification **takes precedence** over generic Docker, PostgreSQL, Linux, Python, and Odoo knowledge.
 
-```bash
-echo "DB=$PGDATABASE STAGE=$ODOO_STAGE VERSION=$ODOO_VERSION APP=$app"
-echo "HOST=$PGHOST PORT=${PGPORT:-${PGDBPORT:-5432}} USER=$POSTGRES_USER"
-supervisorctl status
-curl -s http://127.0.0.1/health
-psql -c "SELECT 1 AS ok;"
-```
+---
 
-Container identity: user `odoo`, home `/home/odoo`, process manager `supervisord`, HTTP proxy `nginx:80`, tooling `/opt/instploy/instploysh/bin/`.
+## Runtime Philosophy
 
-## AI Operational Rules
+InstPloy provides **canonical runtime wrappers**. The runtime owns configuration. The agent executes operations through official interfaces only.
 
-Highest priority. Apply before every action.
+| Domain | Canonical | Violation |
+|--------|-----------|-----------|
+| PostgreSQL | `psql` | `psql -h ...`, connection strings |
+| Session | `odoo_create_session.py` | `/web/session/authenticate`, XML-RPC |
+| ORM over HTTP | JSON-RPC `/web/dataset/call_kw` + cookie | XML-RPC, password auth |
+| Restart | `instploysh-restart http` | `supervisorctl restart odooA`, `kill -9` |
+| Module upgrade | `odoo-update` | `odoo-bin -u` (except catalog refresh) |
+| Module install | `odoo-bin -i` (no install wrapper exists) | Manual SQL on `ir_module_module` |
+| Logs | `tail-odoo`, `grep` on known paths | `tail -f` random paths, `cat` huge logs |
+| Supervisor | `supervisorctl status` | `systemctl`, `kill` |
+| Odoo entry | `odoo-bin` wrapper | `/home/odoo/src/odoo/odoo-bin` direct |
+| Addons-path | Runtime resolves via wrapper | Manual `--addons-path` |
 
-### Always
+Whenever a canonical wrapper exists → **use it**. Do not improvise.
 
-- Read [environment.md](environment.md) env vars; never hardcode credentials.
-- Prefer instploy wrappers over raw binaries (`odoo-bin` wrapper, not `/home/odoo/src/odoo/odoo-bin` directly).
-- Prefer `instploysh-restart http` over `supervisorctl restart odooA` unless user explicitly requests direct restart.
-- Verify after every mutating operation (see [Verification](#verification)).
-- Use `curl -s http://127.0.0.1/health` after any HTTP-affecting change.
-- Connect to PostgreSQL by typing bare `psql` — never pass host, port, user, database, password, or any IP. The shell function reads all of it from the environment ([postgresql.md](postgresql.md#connection)).
-- Read the smallest relevant log first (see [logs.md](logs.md) log chain).
-- Use `--stop-after-init --logfile=` for one-off install/upgrade operations.
-- Treat `session_id` output and `POSTGRES_PASSWORD` as sensitive; never echo in chat.
-- Test permissions with regular users when possible; avoid defaulting to admin (uid 2).
-- Reference canonical sections; do not duplicate command/path tables inline.
-- For Odoo programmatic/RPC access, ALWAYS create a passwordless session via `odoo_create_session.py`, then call JSON-RPC `/web/dataset/call_kw` with the `session_id` cookie. See [odoo-runtime.md](odoo-runtime.md#programmatic--rpc-access-canonical).
-- Look up a valid `user_id` in `res_users` before creating a session (see [postgresql.md](postgresql.md#user-lookup)).
+---
 
-### Never
+## Environment Boundaries
 
-- Never expose passwords, session tokens, or platform secrets in output.
-- Never assume PostgreSQL is on `localhost`; the env-aware `psql` already targets `PGHOST`. Never supply host/db/credentials manually.
-- Never run `instploysh-import-database` without explicit user confirmation (destructive).
-- Never run `odoo-update all` without explicit user confirmation (expensive).
-- Never run install/upgrade on `odooB` during an active `instploysh-restart` swap.
-- Never bypass or document Manager/Hermes authentication mechanisms.
-- Never use `supervisorctl restart` for routine Odoo reloads when `instploysh-restart` is available.
-- Never skip verification at the end of a playbook.
-- Never guess Odoo login passwords (e.g. `admin`/`admin`). Databases use unique platform-generated credentials; defaults do not exist.
-- Never use XML-RPC, `/web/session/authenticate`, `/xmlrpc/2/common`, or password-based `/jsonrpc` for ORM access. Use the passwordless session + JSON-RPC web endpoint instead.
+Inside an InstPloy container, assume the runtime has already configured:
 
-### Prefer / Avoid
+| Already configured | Agent must NOT rebuild |
+|--------------------|------------------------|
+| Database credentials | Connection strings, `-h/-U/-d` |
+| PostgreSQL host/port | `localhost`, manual IPs |
+| Active database (`PGDATABASE`) | Hardcoded DB names |
+| Addons-path | Manual `--addons-path` |
+| Odoo config (`odoo.conf`) | New odoo.conf from scratch |
+| HTTP/gevent ports | Manual port binding |
+| `PYTHONPATH` / pip target | Ad-hoc `sys.path` hacks |
 
-| Prefer | Avoid |
-|--------|-------|
-| `odoo-update <mod>` | Raw `odoo-bin -u` unless install (`-i`) needed |
-| Bare `psql` (env-aware, no args) | Manual `psql -h -U -d` or any hardcoded host/db/credentials |
-| `instploysh-restart http` | Killing Odoo processes directly |
-| `grep` on specific log file | Reading entire large log files |
-| `odoo-bin -i/-u ... --stop-after-init` | Starting Odoo manually for one-off DB ops |
-| Checking `ir_module_module.state` after module ops | Assuming success from exit code alone |
-| Passwordless session + JSON-RPC `/web/dataset/call_kw` | XML-RPC or any password-based auth |
-| Looking up real uid in `res_users` | Assuming `admin`/`admin` or uid 2 |
+If something fails → investigate runtime/env/logs. Do not reconstruct configuration.
 
-### If / Otherwise
+Details: [environment.md](environment.md)
 
-| If | Then | Otherwise |
-|----|------|-----------|
-| Odoo HTTP down | Decision tree: [troubleshooting.md](troubleshooting.md#odoo-wont-start) | — |
-| Module not in catalog | `odoo-bin -u base --stop-after-init --logfile=` | Proceed with install/upgrade |
-| Install/upgrade errors in log | Stop; read traceback; do not restart | Verify state + restart |
-| `psql` fails | Check env vars + `startup.log` | Proceed with Odoo ops |
-| User needs HTTP/RPC auth | `odoo_create_session.py` + JSON-RPC `/web/dataset/call_kw` | Never guess passwords or use XML-RPC |
-| Custom code deployed | `odoo-update <mod>` then `instploysh-restart http` | Restart alone is insufficient |
-| Log file missing | Check legacy path in [logs.md](logs.md#legacy-paths) | Report both paths checked |
+---
+
+## Canonical APIs
+
+Master reference. Subsystem contracts expand each row.
+
+| Task | Canonical API | Alternative (limited) | Forbidden |
+|------|---------------|----------------------|-----------|
+| Database access | `psql` / `psql -c` | `psql <other_db>` (same server) | `-h`, `-p`, `-U`, `-d`, `postgresql://`, manual creds |
+| Session creation | `odoo_create_session.py` | — | `/web/session/authenticate`, XML-RPC auth, password guess |
+| ORM over HTTP | JSON-RPC `/web/dataset/call_kw` + `session_id` cookie | — | XML-RPC, password `/jsonrpc` |
+| Module upgrade | `odoo-update <mod>` | — | `odoo-bin -u` (except `odoo-bin -u base` for catalog) |
+| Module install | `odoo-bin -i <mod> --stop-after-init --logfile=` | — | Manual SQL module install |
+| Restart HTTP | `instploysh-restart http` | `supervisorctl restart odooA` (user explicit only) | `kill -9`, `systemctl` |
+| Reload nginx | `supervisorctl signal HUP nginx` | — | Manual nginx kill |
+| Service status | `supervisorctl status` | — | `systemctl`, `ps aux` + kill |
+| Logs (follow) | `tail-odoo`, `tail-startup`, etc. | `tail -n N <known-path>` | `cat` huge logs, random paths |
+| Log search | `grep` on known paths | `lnav <known-path>` | Unbounded log reads |
+| DB import | `instploysh-import-database` | — | Manual psql restore without wrapper |
+| Storage check | `instploysh-storage` | — | Raw `du` without context |
+| ORM in-process | `odoo-bin shell` | Jupyter kernel `/instploy/editor/` | — |
+| Pip deps | `pip3 install --target=/opt/extra-packages` | — | `pip install` to system |
+
+Full registry: [commands.md](commands.md)
+
+---
+
+## Runtime Contract Violations
+
+If the agent generates any forbidden pattern → **stop**, classify as violation, explain why, regenerate with canonical API.
+
+| Violation | Why | Regenerate as |
+|-----------|-----|---------------|
+| `psql -h/-p/-U/-d` | Bypasses env-aware runtime | `psql` or `psql -c` |
+| `postgresql://...` | Manual connection string | `psql -c` |
+| `PGPASSWORD=... psql` | Exposes/bypasses runtime creds | `psql` |
+| `/web/session/authenticate` | Password auth; wrong inside container | `odoo_create_session.py` |
+| `xmlrpc.client` / `/xmlrpc/2/*` | Wrong protocol; password required | JSON-RPC + session cookie |
+| `admin`/`admin` or password guess | DBs have unique platform creds | `odoo_create_session.py` |
+| `odoo-bin -u <mod>` (upgrade) | Bypasses upgrade wrapper | `odoo-update <mod>` |
+| `supervisorctl restart odooA` (routine) | No blue/green | `instploysh-restart http` |
+| `kill -9` / `systemctl` | Bypasses Supervisor | `instploysh-restart` or `supervisorctl` |
+| Manual `--addons-path` | Runtime resolves paths | `grep addons-path startup.log` |
+| Manual DB credentials in commands | Runtime owns creds | `psql` |
+| `echo $POSTGRES_PASSWORD` | Secret exposure | `test -n "$POSTGRES_PASSWORD"` only |
+
+Subsystem violation catalogs: [postgresql.md](postgresql.md#anti-patterns) · [jsonrpc.md](jsonrpc.md#anti-patterns) · [services.md](services.md#anti-patterns)
+
+---
 
 ## Decision Trees
 
-### Service health
+### Need SQL?
 
 ```
-HTTP unhealthy?
-├─ supervisorctl status → odooA RUNNING?
-│  ├─ NO → troubleshooting.md#odoo-wont-start
-│  └─ YES → curl 127.0.0.1:8069/web/login
-│     ├─ non-200 → logs: odoo-error.log → odoo.log
-│     └─ 200 → check nginx: supervisor/nginx-error.log
+Need SQL?
+└─ psql -c "<SQL>"
+   └─ Need another DB on same server?
+      ├─ YES → psql <database>
+      └─ NO → done
+Never build a PostgreSQL connection.
 ```
 
-### Module operation
+### Need Odoo data?
+
+```
+Need Odoo data?
+└─ Inside InstPloy container?
+   ├─ YES
+   │  └─ Access type?
+   │     ├─ SQL → psql -c
+   │     ├─ ORM in-process → odoo-bin shell
+   │     ├─ ORM over HTTP → odoo_create_session.py → session_id → JSON-RPC call_kw
+   │     ├─ Browser → session_id cookie
+   │     └─ Notebook → /instploy/editor/
+   └─ NO (outside container) → out of scope; user must specify external auth
+```
+
+### Need module change?
 
 ```
 Need module change?
-├─ state=uninstalled → playbook: install-module
-├─ state=installed + code changed → playbook: upgrade-module
-├─ not in catalog → odoo-bin -u base --stop-after-init --logfile=
-└─ state=to upgrade → odoo-update <mod>
+└─ psql: check ir_module_module.state
+   ├─ uninstalled → odoo-bin -i <mod> --stop-after-init --logfile=
+   ├─ installed + code changed → odoo-update <mod> → instploysh-restart http
+   ├─ not in catalog → odoo-bin -u base --stop-after-init --logfile=
+   └─ errors in log → STOP; fix; do not restart until clean
 ```
 
-### Data access
+### Need restart?
 
 ```
-Need data?
-├─ SQL query → psql
-├─ ORM in-process → odoo-bin shell
-├─ ORM via RPC → odoo_create_session.py + JSON-RPC /web/dataset/call_kw
-├─ Browser UI → session_id cookie
-└─ Notebook → /instploy/editor/ (Odoo kernel)
-                 (never XML-RPC; never password auth)
+Need restart?
+└─ HTTP workers?
+   ├─ YES → instploysh-restart http
+   └─ Cron only → instploysh-restart cron
+Never kill -9. Never systemctl.
 ```
 
-Full symptom trees: [troubleshooting.md](troubleshooting.md)
+Full trees: [troubleshooting.md](troubleshooting.md)
 
-## Verification
+---
 
-Every mutating operation must end with applicable checks:
+## Orient (mandatory first step)
 
 ```bash
-supervisorctl status odooA                    # RUNNING
-psql -c "SELECT 1;"                          # ok
-curl -s http://127.0.0.1/health               # healthy
-curl -s -o /dev/null -w "%{http_code}" http://127.0.0.1:8069/web/login  # 200 or 303
+echo "DB=$PGDATABASE STAGE=$ODOO_STAGE VERSION=$ODOO_VERSION APP=$app"
+supervisorctl status
+curl -s http://127.0.0.1/health
+psql -c "SELECT 1;"
 ```
 
-Module ops additionally:
+Container: user `odoo`, home `/home/odoo`, supervisord, nginx `:80`, tooling `/opt/instploy/instploysh/bin/`.
+
+---
+
+## Verification (mandatory last step)
+
+Every mutating operation ends with applicable checks:
 
 ```bash
-psql -c "SELECT name, state FROM ir_module_module WHERE name='<module>';"
+supervisorctl status odooA
+psql -c "SELECT 1;"
+curl -s http://127.0.0.1/health
+curl -s -o /dev/null -w "%{http_code}" http://127.0.0.1:8069/web/login
 ```
 
-## Safety Classification
+Playbooks include per-operation verification: [playbooks.md](playbooks.md)
 
-| Class | Examples |
-|-------|----------|
-| Read-only | `supervisorctl status`, `tail`, `grep`, `psql SELECT`, `curl /health` |
-| Safe | `odoo-update <single>`, `instploysh-restart http`, `instploysh-storage` |
-| Caution | `supervisorctl restart odooA`, `odoo-update all`, `pip3 install` |
-| Destructive | `instploysh-import-database`, `instploysh-sql-access reset` |
-| Irreversible | DB import (erases current DB), obfuscate (staging only) |
+---
 
-Command-level safety: [commands.md](commands.md)
+## Subsystem Runtime Contracts
+
+| Subsystem | Contract file |
+|-----------|---------------|
+| PostgreSQL | [postgresql.md](postgresql.md) |
+| JSON-RPC / Sessions | [jsonrpc.md](jsonrpc.md) |
+| Odoo runtime (shell, modules) | [odoo-runtime.md](odoo-runtime.md) |
+| Supervisor | [services.md](services.md) |
+| Nginx | [networking.md](networking.md) |
+| Filesystem / addons | [filesystem.md](filesystem.md) |
+| Logs | [logs.md](logs.md) |
+| Environment | [environment.md](environment.md) |
 
 ## Execution Playbooks
 
-| Playbook | File section |
-|----------|--------------|
-| Install module | [playbooks.md](playbooks.md#install-module) |
-| Upgrade module | [playbooks.md](playbooks.md#upgrade-module) |
-| Restart HTTP (blue/green) | [playbooks.md](playbooks.md#restart-http) |
-| Import database | [playbooks.md](playbooks.md#import-database) |
-| Create web session | [playbooks.md](playbooks.md#create-session) |
-| Inspect logs for errors | [playbooks.md](playbooks.md#inspect-logs) |
-| Recover failed deployment | [playbooks.md](playbooks.md#recover-failed-deployment) |
+| Playbook | Section |
+|----------|---------|
+| Install module | [playbooks.md#install-module](playbooks.md#install-module) |
+| Upgrade module | [playbooks.md#upgrade-module](playbooks.md#upgrade-module) |
+| Restart HTTP | [playbooks.md#restart-http](playbooks.md#restart-http) |
+| Create session + JSON-RPC | [playbooks.md#create-session](playbooks.md#create-session) |
+| Import database | [playbooks.md#import-database](playbooks.md#import-database) |
+| Inspect logs | [playbooks.md#inspect-logs](playbooks.md#inspect-logs) |
+| Recover failure | [playbooks.md#recover-failed-deployment](playbooks.md#recover-failed-deployment) |
 
-## Canonical References
+## Out of Scope
 
-| Topic | File |
-|-------|------|
-| Environment variables | [environment.md](environment.md) |
-| Filesystem and addons-path | [filesystem.md](filesystem.md) |
-| Supervisor programs and ports | [services.md](services.md) |
-| Nginx routes and upstreams | [networking.md](networking.md) |
-| Log catalog and inspection | [logs.md](logs.md) |
-| PostgreSQL access | [postgresql.md](postgresql.md) |
-| Odoo shell, sessions, modules | [odoo-runtime.md](odoo-runtime.md) |
-| Command registry | [commands.md](commands.md) |
-| Execution playbooks | [playbooks.md](playbooks.md) |
-| Symptom troubleshooting | [troubleshooting.md](troubleshooting.md) |
+Do not investigate: Manager auth, Hermes auth, platform secret keys, entrypoint obfuscation, SSH keys, notifier/socket internals.
+
+---
+
+## Runtime Invariant
+
+> If InstPloy provides a wrapper or runtime interface, the agent MUST use it.
+> Generic implementations are runtime contract violations.

@@ -1,100 +1,105 @@
-# Logs
+# Logs Runtime Contract
 
-Canonical log path catalog. Symptom-to-log mapping: [troubleshooting.md](troubleshooting.md).
+**Scope:** InstPloy Odoo Container — log inspection.
 
-## Application logs
+---
 
-| Key | Path | Contents |
-|-----|------|----------|
-| `odoo_logs` | `/home/odoo/logs/odoo.log` | Main Odoo runtime |
-| `startup` | `/home/odoo/logs/startup.log` | Startup, addons-path, DB connection |
-| `install_log` | `/home/odoo/logs/install.log` | Module installation |
-| `import_database` | `/home/odoo/logs/instploysh-import-database.log` | DB import |
-| `restore` | `/home/odoo/logs/restore.log` | DB restore |
-| `http_logs` | `/home/odoo/logs/access.log` | Nginx access |
-| `http_error` | `/home/odoo/logs/error.log` | Nginx errors |
-| `manager_instance` | `/home/odoo/logs/manager.log` | Session creation, manager Python ops |
-| `backup` | `/home/odoo/logs/backup.log` | Scheduled backups |
-| — | `/home/odoo/logs/odoo-bin-wrapper.log` | Wrapper args, env, addons check |
-| — | `/home/odoo/logs/odoo-exec-error.log` | Odoo exec stderr (if enabled) |
+## Runtime Contract
 
-## Supervisor logs
+| Field | Value |
+|-------|-------|
+| Supported | `tail-odoo`, `tail-startup`, `tail-manager`, `grep` on known paths, `lnav` |
+| Unsupported | `cat` on large logs, `tail -f` on unknown paths, reading entire log files |
+| Golden rule | Read smallest relevant log first; use known paths only |
+| Decision rule | Match symptom → log chain below |
+| Failure rule | If path missing, check legacy paths; never invent log locations |
 
-Base: `/home/odoo/logs/supervisor/`
+---
 
-| Service | stdout | stderr |
-|---------|--------|--------|
-| supervisord | `supervisord.log` | — |
-| odooA / odooB | `odoo.log` | `odoo-error.log` |
-| manager | `manager.log` | `manager-error.log` |
-| nginx | `nginx.log` | `nginx-error.log` |
-| jupyter_editor | `jupyter-editor.log` | `jupyter-editor-error.log` |
-| jupyter_webshell | `jupyter-webshell.log` | `jupyter-webshell-error.log` |
-| hermes_agent | `hermes-agent.log` | `hermes-agent-error.log` |
+## Canonical Log APIs
 
-## Legacy paths
+| Intent | Canonical | Forbidden |
+|--------|-----------|-----------|
+| Follow Odoo log | `tail-odoo` | `tail -f /var/log/...` (unknown) |
+| Follow startup | `tail-startup` | — |
+| Follow manager | `tail-manager` | — |
+| Search errors | `grep -iE "error\|critical\|traceback" <known-path>` | `cat odoo.log` |
+| Addons-path check | `grep "Final addons-path" /home/odoo/logs/startup.log` | — |
 
-Manager UI may reference `/var/log/supervisor/` or `/var/log/supervisord.log`. Check both if file missing:
+Aliases from `/etc/profile.d/instploy.sh`: `tail-odoo`, `tail-manager`, `tail-startup`, `tail-backup`, `tail-access`
+
+---
+
+## Log Catalog
+
+### Application (`/home/odoo/logs/`)
 
 | Key | Path |
 |-----|------|
-| `supervisord_logs` | `/var/log/supervisord.log` |
-| `manager_log` | `/var/log/supervisor/manager.out.log` |
-| `manager_err` | `/var/log/supervisor/manager.err.log` |
-| `supervisord_odoo_log` | `/var/log/supervisor/odoo.out.log` |
-| `supervisord_odoo_err` | `/var/log/supervisor/odoo.err.log` |
-| `supervisord_jupyterlab_log` | `/var/log/supervisor/jupyterlab.out.log` |
-| `supervisord_jupyterlab_err` | `/var/log/supervisor/jupyterlab.err.log` |
-| `supervisord_webshell_log` | `/var/log/supervisor/webshell.out.log` |
-| `supervisord_webshell_err` | `/var/log/supervisor/webshell.err.log` |
+| `odoo_logs` | `odoo.log` |
+| `startup` | `startup.log` |
+| `install_log` | `install.log` |
+| `import_database` | `instploysh-import-database.log` |
+| `http_logs` | `access.log` |
+| `http_error` | `error.log` |
+| `manager_instance` | `manager.log` |
+| `backup` | `backup.log` |
+| wrapper | `odoo-bin-wrapper.log` |
 
-## Log chain (read in order)
+### Supervisor (`/home/odoo/logs/supervisor/`)
+
+| Service | stdout | stderr |
+|---------|--------|--------|
+| odooA/B | `odoo.log` | `odoo-error.log` |
+| nginx | `nginx.log` | `nginx-error.log` |
+| manager | `manager.log` | `manager-error.log` |
+| jupyter | `jupyter-editor.log` | `jupyter-editor-error.log` |
+| hermes | `hermes-agent.log` | `hermes-agent-error.log` |
+
+### Legacy (if primary missing)
+
+`/var/log/supervisor/*.out.log`, `/var/log/supervisor/*.err.log`, `/var/log/supervisord.log`
+
+---
+
+## Investigation Priority
 
 | Scenario | Order |
 |----------|-------|
 | Odoo won't start | `odoo-error.log` → `odoo-bin-wrapper.log` → `odoo.log` → `startup.log` |
-| Install/upgrade failure | `odoo.log` (or `--logfile=` stdout) → `odoo-bin-wrapper.log` → `startup.log` |
-| 502 HTTP | `odoo-error.log` → `nginx-error.log` |
-| Session failure | `manager.log` |
-| Addons missing | `startup.log` (grep `addons-path`) |
+| Install/upgrade fail | operation output → `odoo.log` → `odoo-bin-wrapper.log` → `startup.log` |
+| HTTP 502 | `odoo-error.log` → `nginx-error.log` |
+| Session fail | `manager.log` |
+| Addons missing | `startup.log` |
+| Restart issues | `startup.log` → supervisor stderr → `odoo.log` → wrapper → infrastructure |
 
-## Shell aliases
+---
 
-From `/etc/profile.d/instploy.sh`:
+## Error Signatures
 
-| Alias | Target |
-|-------|--------|
-| `tail-odoo` | `/home/odoo/logs/odoo.log` |
-| `tail-manager` | `/home/odoo/logs/manager.log` |
-| `tail-startup` | `/home/odoo/logs/startup.log` |
-| `tail-backup` | `/home/odoo/logs/backup.log` |
-| `tail-access` | `/home/odoo/logs/access.log` |
+| Pattern | Cause |
+|---------|-------|
+| `Failed to load registry` | Broken module / migration |
+| `psycopg2.*Error` | DB/schema |
+| `ParseError` / `XMLSyntaxError` | Bad XML |
+| `ImportError` | Missing pip dep → `/opt/extra-packages` |
+| `Module ... not found` | Addons-path |
 
-## Inspection patterns
+---
 
-```bash
-tail -n 100 -f /home/odoo/logs/odoo.log
-grep -iE "error|critical|traceback|failed" /home/odoo/logs/odoo.log | tail -40
-grep "Final addons-path" /home/odoo/logs/startup.log
-lnav /home/odoo/logs/odoo.log
-ls -lhS /home/odoo/logs/
-```
+## Anti-Patterns
 
-## Error signatures
+| Violation | Regenerate as |
+|-----------|---------------|
+| `cat /home/odoo/logs/odoo.log` | `grep ... \| tail -40` or `tail-odoo` |
+| `journalctl` | Known path + `grep` |
+| `docker logs` (inside container) | Supervisor/app logs above |
+| Invented log path | Use catalog table |
 
-| Pattern | Likely cause |
-|---------|--------------|
-| `CRITICAL ... Failed to load registry` | Broken module / migration |
-| `psycopg2.*Error` | SQL/schema problem |
-| `ParseError` / `XMLSyntaxError` | Bad view/data XML |
-| `ImportError` / `ModuleNotFoundError` | Missing pip dep → `/opt/extra-packages` |
-| `Module ... not found` | Wrong addons-path |
-| `Traceback (most recent call last)` | Read lines below |
+---
 
-## Log env vars
+## Verification
 
-| Variable | Effect |
-|----------|--------|
-| `LOG_LEVEL` | Odoo verbosity (`info` default) |
-| `LOG_MANAGER` | Manager debug |
-| `DEBUG_LOG` | Manager service debug |
+After log investigation, confirm fix with operation-specific verification from [SKILL.md](SKILL.md#verification-mandatory-last-step).
+
+Symptom trees: [troubleshooting.md](troubleshooting.md)

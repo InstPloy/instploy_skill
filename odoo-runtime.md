@@ -1,174 +1,134 @@
-# Odoo Runtime
+# Odoo Runtime Contract
 
-Canonical Odoo shell, session, RPC, and module operation reference.
+**Scope:** InstPloy Odoo Container — shell, modules, import.
 
-## Odoo shell
+---
 
-```bash
-odoo-bin shell
+## Runtime Contract
+
+| Field | Value |
+|-------|-------|
+| Supported entry | `odoo-bin` wrapper at `/opt/instploy/instploysh/bin/odoo-bin` |
+| Unsupported | Direct `/home/odoo/src/odoo/odoo-bin`, manual `--addons-path`, manual DB flags |
+| Golden rule | Wrapper owns addons-path, DB creds, ports |
+| Session/RPC | See [jsonrpc.md](jsonrpc.md) — not covered here |
+| SQL | See [postgresql.md](postgresql.md) — `psql` only |
+
+---
+
+## Decision Tree
+
+```
+Need Odoo operation?
+├─ SQL → psql ([postgresql.md](postgresql.md))
+├─ ORM in-process → odoo-bin shell
+├─ ORM over HTTP → [jsonrpc.md](jsonrpc.md)
+├─ Install module → odoo-bin -i <mod> --stop-after-init --logfile=
+├─ Upgrade module → odoo-update <mod>
+├─ Restart after deploy → instploysh-restart http
+└─ Notebook → /instploy/editor/ (kernel managed)
 ```
 
-| Attribute | Value |
-|-----------|-------|
-| Safety | Caution (ORM writes possible) |
-| Access | Superuser by default |
-| Commit | `env.cr.commit()` required for persistence |
+---
+
+## Odoo Shell
+
+| Field | Value |
+|-------|-------|
+| Canonical | `odoo-bin shell` |
+| Safety | Caution (ORM writes) |
+| Commit | `env.cr.commit()` required |
 
 ```python
 env['res.users'].search_read([('active', '=', True)], ['login', 'name'])
-env['res.partner'].search_read([], ['name', 'email'], limit=5)
 env.cr.commit()
 ```
 
-Warning: uncommitted changes in open shell can block the database.
+Uncommitted shell changes can block the database.
 
-## Programmatic / RPC access (CANONICAL)
+---
 
-Rule: obtain access **passwordless** via `odoo_create_session.py`. The script reads the DB registry and computes the session token directly — no login password required.
+## Modules Runtime Contract
 
-Forbidden:
-- Never guess passwords (`admin`/`admin`). Each database has unique platform-generated credentials; defaults do not exist.
-- Never use XML-RPC. Use JSON-RPC web endpoints with the session cookie.
-- Never call `/web/session/authenticate`, `/xmlrpc/2/common`, or `/jsonrpc` with a password for ORM access.
+| Operation | Canonical | Forbidden |
+|-----------|-----------|-----------|
+| Upgrade | `odoo-update <mod>` | `odoo-bin -u <mod>` |
+| Install | `odoo-bin -i <mod> --stop-after-init --logfile=` | Manual SQL on `ir_module_module` |
+| Catalog refresh | `odoo-bin -u base --stop-after-init --logfile=` | — |
+| Upgrade all | `odoo-update all` (user explicit only) | — |
+| Post-deploy | `odoo-update <mod>` then `instploysh-restart http` | Restart without upgrade |
 
-### Step 1 — Create session (passwordless)
+Required flags for one-off ops: `--stop-after-init --logfile=`
 
-Script: `/opt/instploy/instploysh/lib/odoo_create_session.py`
-
-```bash
-python3 /opt/instploy/instploysh/lib/odoo_create_session.py <user_id> 2>&1 | grep -o '{.*}'
-```
-
-| Attribute | Value |
-|-----------|-------|
-| Safety | Caution (creates real auth session) |
-| Auth | None required (DB registry + token compute) |
-| Output | JSON: `session_id`, `login`, `user_id`, `db` |
-| Log | `/home/odoo/logs/manager.log` (sid masked) |
-| Cookie | Use `session_id` value as HTTP cookie |
-| Scope | Run inside container; sid valid for that Odoo instance |
-
-Success: `{"session_id":"<sid>","login":"admin","user_id":2,"db":"<db>"}`
-Error: `{"error":"User with ID 99 not found"}`
-
-Find a valid user id first: see [postgresql.md](postgresql.md#user-lookup). Do not assume uid 2 exists or is desired.
-
-### Step 2 — Extract sid
+### Verify module state
 
 ```bash
-SID=$(python3 /opt/instploy/instploysh/lib/odoo_create_session.py <uid> 2>&1 | grep -o '{.*}' \
-  | python3 -c "import sys,json; print(json.load(sys.stdin)['session_id'])")
+psql -c "SELECT name, state, latest_version FROM ir_module_module WHERE name='<module>';"
 ```
 
-### Step 3 — JSON-RPC ORM call (session cookie, no password)
+| State | Action |
+|-------|--------|
+| `uninstalled` | `odoo-bin -i` |
+| `installed` + code change | `odoo-update` |
+| not in catalog | `odoo-bin -u base --stop-after-init --logfile=` |
 
-Use the web JSON endpoint `/web/dataset/call_kw` with the `session_id` cookie:
+Playbooks: [playbooks.md#install-module](playbooks.md#install-module) · [upgrade-module](playbooks.md#upgrade-module)
 
-```bash
-curl -s http://127.0.0.1/web/dataset/call_kw \
-  -H "Content-Type: application/json" \
-  -b "session_id=$SID" \
-  -d '{"jsonrpc":"2.0","method":"call","params":{
-        "model":"res.users","method":"search_read",
-        "args":[[],["login","name"]],"kwargs":{"limit":5}}}' | python3 -m json.tool
-```
+---
 
-Generic ORM template:
+## Database Import
 
-```json
-{"jsonrpc":"2.0","method":"call","params":{
-  "model":"<model>","method":"<method>",
-  "args":[<positional>],"kwargs":{<keyword>}}}
-```
+| Field | Value |
+|-------|-------|
+| Canonical | `instploysh-import-database <backup.zip>` |
+| Safety | Destructive / Irreversible |
+| Filestore | `/home/odoo/data/filestore/<PGDATABASE>` |
 
-### Verify session
+Requires explicit user confirmation before execution.
 
-```bash
-curl -s -b "session_id=$SID" http://127.0.0.1/web/session/get_session_info | python3 -m json.tool
-```
+---
 
-### Internal RPC server
+## Jupyter Kernel
 
-`/opt/instploy/instploysh/bin/odoo-rpc` — supervisor-managed, dispatches as superuser. Do not run manually unless debugging.
-
-Playbook: [playbooks.md](playbooks.md#create-session)
-
-## Module install
-
-No `odoo-install` wrapper. Use `odoo-bin -i`:
-
-```bash
-odoo-bin -i <module> --stop-after-init --logfile=
-odoo-bin -i sale,account,stock --stop-after-init --logfile=
-```
-
-| Flag | Purpose |
-|------|---------|
-| `--stop-after-init` | Exit after operation (required) |
-| `--logfile=` | Output to stdout for live monitoring |
-
-Refresh module catalog if module missing:
-
-```bash
-odoo-bin -u base --stop-after-init --logfile=
-```
-
-Playbook: [playbooks.md](playbooks.md#install-module)
-
-## Module upgrade
-
-```bash
-odoo-update <module>
-odoo-update sale,account
-odoo-update all    # caution: expensive
-```
-
-Equivalent: `odoo-bin -u <module> --stop-after-init --logfile=`
-
-After custom code deploy: `odoo-update <mod>` then `instploysh-restart http`.
-
-Playbook: [playbooks.md](playbooks.md#upgrade-module)
-
-## Jupyter Odoo kernel
-
-| Item | Value |
-|------|------|
-| Script | `/opt/instploy/instploysh/bin/odoo-kernel` |
-| Env | `ODOO_KERNEL=1` |
-| Namespace | `env`, `odoo`, `self` (admin) |
+| Field | Value |
+|-------|-------|
 | Route | `/instploy/editor/` |
-| Managed by | JupyterLab supervisor program |
+| Script | `/opt/instploy/instploysh/bin/odoo-kernel` |
+| Managed by | Supervisor `jupyter_editor` |
+| Agent action | Do not run manually |
 
-## Database import
+---
+
+## Investigation Priority
+
+| Scenario | Order |
+|----------|-------|
+| Module install/upgrade fail | operation log → `odoo.log` → `odoo-bin-wrapper.log` → `startup.log` |
+| Module not found | `startup.log` (addons-path) → `filesystem.md` user addons |
+| Shell/registry error | `odoo.log` traceback |
+
+---
+
+## Anti-Patterns
+
+| Violation | Regenerate as |
+|-----------|---------------|
+| `odoo-bin -u sale` (upgrade) | `odoo-update sale` |
+| `/home/odoo/src/odoo/odoo-bin` direct | `odoo-bin` wrapper |
+| `--addons-path=...` manual | Check `grep addons-path startup.log` |
+| `--db_host` / `--db_user` manual | Use wrapper (reads env) |
+| Skip `--stop-after-init` on install | Add `--stop-after-init --logfile=` |
+
+---
+
+## Verification
+
+After module ops:
 
 ```bash
-instploysh-import-database <backup.zip>
-instploysh-import-database --logfile=/home/odoo/logs/import.log <backup.zip>
+psql -c "SELECT name, state FROM ir_module_module WHERE name='<module>';"
+instploysh-restart http
+curl -s -o /dev/null -w "%{http_code}" http://127.0.0.1:8069/web/login
 ```
 
-| Attribute | Value |
-|-----------|-------|
-| Safety | Destructive (erases current DB) |
-| Formats | Odoo `.zip` (dump.sql + filestore) or instploy plain (.json + .sql.gz) |
-| Filestore target | `/home/odoo/data/filestore/<PGDATABASE>` |
-
-Playbook: [playbooks.md](playbooks.md#import-database)
-
-## odoo_utils.py (library)
-
-Not run directly. Used by wrappers:
-- `get_odoo_args()` — build CLI args from env
-- `get_obfuscate_args()` — obfuscate args
-- `database_exists()` — test DB connectivity
-
-## Access decision
-
-```
-SQL only          → psql ([postgresql.md](postgresql.md))
-ORM (in-process)  → odoo-bin shell
-ORM (RPC)         → odoo_create_session.py + JSON-RPC /web/dataset/call_kw
-Browser UI        → session_id cookie
-Notebook          → /instploy/editor/
-```
-
-Never: XML-RPC, or any password-based authentication.
+Sessions/JSON-RPC: [jsonrpc.md](jsonrpc.md)

@@ -1,94 +1,85 @@
-# Environment
+# Environment Runtime Contract
 
-Canonical environment variable reference. All credentials and connection targets come from env — never hardcode.
+**Scope:** InstPloy Odoo Container — runtime-provided configuration.
 
-## Identity
+---
 
-| Variable | Purpose | Default |
-|----------|---------|---------|
-| `PGDATABASE` | Active Odoo database name | `master` / `odoo` |
-| `ODOO_VERSION` | Version string (e.g. `18.0`) | — |
-| `ODOO_STAGE` | `development`, `staging`, `production` | — |
-| `app` | Active Odoo slot: `odooA` or `odooB` | `odooA` |
+## Runtime Contract
 
-## PostgreSQL
+| Field | Value |
+|-------|-------|
+| Purpose | Reference only — agents READ env, never CONSTRUCT connections from it |
+| Golden rule | Env vars are consumed by wrappers (`psql`, `odoo-bin`), not by agent-assembled CLI flags |
+| Forbidden | `echo $POSTGRES_PASSWORD`, building `psql -h $PGHOST ...`, exporting creds |
 
-| Variable | Purpose | Default |
-|----------|---------|---------|
-| `PGHOST` | Database host | `db` (often external IP, not localhost) |
-| `PGPORT` / `PGDBPORT` | Database port | `5432` |
-| `POSTGRES_USER` | DB username | `odoo` |
-| `POSTGRES_PASSWORD` | DB password | — |
-| `PGUSER` | Alias for `POSTGRES_USER` | — |
-| `PGPASSWORD` | Alias; set from `POSTGRES_PASSWORD` by profile | — |
+---
 
-Safe read (never print password):
+## Pre-Configured Assumptions
+
+Inside container, runtime has already set:
+
+| Variable | Role |
+|----------|------|
+| `PGDATABASE` | Active Odoo database |
+| `POSTGRES_USER` / `POSTGRES_PASSWORD` | DB credentials (password via `PGPASSWORD`) |
+| `PGHOST` | DB host (often external, not localhost) |
+| `PGPORT` / `PGDBPORT` | DB port (default 5432) |
+| `ODOO_VERSION` | e.g. `18.0` |
+| `ODOO_STAGE` | development / staging / production |
+| `app` | odooA or odooB |
+| `odoo_port` / `chat_port` | HTTP / gevent ports |
+| `ADDONS_PATH` | Addons roots (wrapper resolves) |
+| `WORKERS` | Worker count |
+| `ENTERPRISE` | Enterprise/themes paths |
+| `LOG_LEVEL` | Odoo verbosity |
+
+Safe diagnostic (no secrets):
 
 ```bash
-echo "DB=$PGDATABASE HOST=$PGHOST PORT=${PGPORT:-${PGDBPORT:-5432}} USER=$POSTGRES_USER"
+echo "DB=$PGDATABASE STAGE=$ODOO_STAGE VERSION=$ODOO_VERSION APP=$app"
+echo "HOST=$PGHOST PORT=${PGPORT:-${PGDBPORT:-5432}} USER=$POSTGRES_USER"
 test -n "$POSTGRES_PASSWORD" && echo "Password: [set]" || echo "Password: [not set]"
 ```
 
-## Odoo runtime
+---
 
-| Variable | Purpose | Default |
-|----------|---------|---------|
-| `ADDONS_PATH` | Comma-separated addons roots (resolved at startup) | — |
-| `WORKERS` | Worker count; `0` = single process | `0` |
-| `ENTERPRISE` | Include enterprise/themes paths | `true` |
-| `odoo_port` | HTTP port for current slot | 8069 (odooA) / 9069 (odooB) |
-| `chat_port` | Gevent/websocket port | 8072 (odooA) / 9072 (odooB) |
-| `LOG_LEVEL` | Odoo log verbosity | `info` |
-| `ODOO_KERNEL` | `1` = notebook mode (no HTTP, workers=0) | `0` |
-| `ODOO_STAGE` | Controls `--without-demo` and neutralize banner | — |
-| `DB_MAXCONN` | Max DB connections | `16` |
-| `LIMIT_MEMORY_HARD` | Memory hard limit (bytes) | `2684354560` |
-| `LIMIT_MEMORY_SOFT` | Memory soft limit (bytes) | `2147483648` |
-| `MAX_CRON_THREADS` | Cron thread count | `2` |
-| `SMTP_HOST` / `SMTP_PORT` | SMTP relay | `127.0.0.1` / `25` |
+## Port Logic
 
-## Logging / debug
+| app | HTTP | Gevent |
+|-----|------|--------|
+| odooA | 8069 | 8072 |
+| odooB | 9069 | 9072 |
 
-| Variable | Purpose |
-|----------|---------|
-| `LOG_MANAGER` | Manager debug logging |
-| `DEBUG_LOG` | Manager service debug mode |
+Odoo 18+: `--http-port`. Odoo 17-: `--xmlrpc-port`. Gevent when `WORKERS > 0`.
+
+---
 
 ## PYTHONPATH
-
-Set automatically by wrappers:
 
 ```
 /opt/extra-packages:/opt/instploy:/home/odoo/src/odoo
 ```
 
-`/opt/extra-packages` overrides core when same module name exists.
+Set by wrappers and `/etc/profile.d/instploy.sh`.
 
-## Port selection logic
+---
 
-- `app=odooA` → HTTP 8069, gevent 8072
-- `app=odooB` → HTTP 9069, gevent 9072
-- Override: `odoo_port`, `chat_port`
-- Odoo 18+: `--http-port`; Odoo 17-: `--xmlrpc-port`
-- `--gevent-port` only when `WORKERS > 0`
+## Anti-Patterns
 
-## Odoo version flags
+| Violation | Why |
+|-----------|-----|
+| Reconstruct connection from env vars in CLI | Wrappers already bind env |
+| `export POSTGRES_PASSWORD=...` | Runtime owns creds |
+| Change `PGHOST` to `localhost` | Wrong host; breaks connection |
+| Manual `ADDONS_PATH` export to fix modules | Deploy code; check startup.log |
 
-| Version | HTTP flag | Notes |
-|---------|-----------|-------|
-| 17 and below | `--xmlrpc-port` | Standard workers + gevent |
-| 18+ | `--http-port` | Registry API changes in kernel |
-| 19+ | `--http-port` | `db_name` is a list in config |
+---
 
-Check: `echo $ODOO_VERSION`
+## Investigation Priority
 
-## Shell profile
+1. Orient echo commands above
+2. `psql -c "SELECT 1;"`
+3. `/home/odoo/logs/startup.log`
+4. Platform/infrastructure
 
-`/etc/profile.d/instploy.sh` exports:
-- `PGPASSWORD` from `POSTGRES_PASSWORD`
-- `PIP_TARGET=/opt/extra-packages`
-- `PYTHONPATH` with extra-packages
-- Log tail aliases (`tail-odoo`, etc.)
-- `psql` shell function (env-aware)
-
-Reload: `reload-profile` or `source /etc/profile.d/instploy.sh`
+PostgreSQL usage: [postgresql.md](postgresql.md)

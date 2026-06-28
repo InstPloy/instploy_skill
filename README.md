@@ -1,52 +1,39 @@
-# instploy Odoo Container Skill
+# InstPloy Odoo Container — Runtime Specification
 
-Production-grade operational knowledge base for AI agents inside instploy Odoo Docker containers.
+Production-grade runtime specification for autonomous agents (Claude Code, Cursor, Codex, Gemini, Hermes, MCP).
+
+**Invariant:** Canonical InstPloy wrappers only. Generic implementations are runtime contract violations.
 
 ## Install
 
-### Cursor
-
 ```bash
 cp -r instploy_skill ~/.cursor/skills/instploy-odoo-container
-```
-
-### skills.sh
-
-```bash
-npx skills add <owner>/instploy_skill --skill instploy-odoo-container
-```
-
-## Usage
-
-```
-@instploy-odoo-container install module sale and verify
+# or
+npx skills add https://github.com/InstPloy/instploy_skill --skill instploy-odoo-container
 ```
 
 ## Architecture
 
 | File | Role |
 |------|------|
-| `SKILL.md` | Entry: AI rules, decision trees, verification, index |
-| `environment.md` | Canonical env vars |
-| `filesystem.md` | Canonical paths, addons-path resolution |
-| `services.md` | Supervisor programs, ports |
-| `networking.md` | Nginx routes, upstreams |
-| `logs.md` | Canonical log catalog |
-| `postgresql.md` | DB access |
-| `odoo-runtime.md` | Shell, sessions, module ops |
-| `commands.md` | Command registry with safety classes |
-| `playbooks.md` | Deterministic execution sequences |
-| `troubleshooting.md` | Symptom-based decision trees |
+| `SKILL.md` | Entry: activation, philosophy, canonical APIs, violations, trees |
+| `postgresql.md` | PostgreSQL runtime contract |
+| `jsonrpc.md` | Session + JSON-RPC runtime contract |
+| `odoo-runtime.md` | Odoo shell, modules, import |
+| `services.md` | Supervisor runtime contract |
+| `networking.md` | Nginx runtime contract |
+| `filesystem.md` | Paths, addons runtime contract |
+| `logs.md` | Logs runtime contract |
+| `environment.md` | Env boundaries (read-only reference) |
+| `commands.md` | Command registry |
+| `playbooks.md` | Execution playbooks with verification |
+| `troubleshooting.md` | Symptom decision trees |
 
-Design: define once in canonical files; reference elsewhere. No duplication.
+## Activation Triggers
 
-## Triggers
+Odoo · InstPloy · PostgreSQL · Supervisor · JSON-RPC · session_id · odoo_create_session · addons · module · restart · nginx · database · Docker container
 
-- Operating inside instploy Odoo containers
-- Installing/upgrading Odoo modules
-- Reading logs, obtaining credentials/sessions
-- Restarting Odoo (blue/green)
-- Debugging startup, DB, module, or HTTP issues
+Overrides generic Docker, PostgreSQL, Linux, Python, and Odoo knowledge.
 
 ## Author
 

@@ -1,110 +1,79 @@
-# Filesystem
+# Filesystem Runtime Contract
 
-Canonical path reference. Do not duplicate elsewhere.
+**Scope:** InstPloy Odoo Container — paths and addons.
 
-## Directory tree
+---
 
-```
-/home/odoo/
-├── src/
-│   ├── odoo/                 # Core; real binary: src/odoo/odoo-bin
-│   │   ├── addons/
-│   │   └── odoo/addons/
-│   ├── enterprise/           # If ENTERPRISE=true
-│   ├── themes/               # If ENTERPRISE=true
-│   ├── user/                 # Custom addons (mounted)
-│   └── task/                 # Scheduled tasks (mounted)
-├── data/
-│   ├── filestore/<db>/       # Attachments
-│   └── sessions/             # HTTP sessions
-├── logs/                     # Application logs
-│   └── supervisor/           # Per-service supervisor logs
-├── backups/                  # Backup storage (mounted)
-├── .config/odoo/odoo.conf    # Odoo config (mounted)
-├── .ssh/                     # Platform-managed
-└── .bash_history             # Mounted
+## Runtime Contract
 
-/opt/
-├── instploy/
-│   ├── instploysh/bin/       # CLI wrappers
-│   ├── instploysh/lib/       # Python helpers
-│   ├── jupyterlab/           # JupyterLab
-│   └── image_manager         # Manager binary (platform-managed)
-├── extra-packages/           # User pip installs
-└── jupyter/packages/
+| Field | Value |
+|-------|-------|
+| Supported | Read known paths; deploy to `/home/odoo/src/user`; verify via `startup.log` |
+| Unsupported | Manual `--addons-path`, rebuilding `odoo.conf`, relocating data dir |
+| Golden rule | Runtime resolves addons-path; agent reads, does not reconstruct |
+| Decision rule | Custom module → `/home/odoo/src/user`; verify `__manifest__.py` exists |
+| Failure rule | Check `grep addons-path startup.log`; never hand-build addons-path |
 
-/etc/
-├── nginx/conf.d/default.conf
-├── supervisor/conf.d/
-└── profile.d/instploy.sh
-```
+---
 
-## Volume mounts (typical)
-
-| Host | Container |
-|------|-----------|
-| `./addons` | `/home/odoo/src/user` |
-| `./data_dir` | `/home/odoo/data` |
-| `./logs` | `/home/odoo/logs` |
-| `./etc/odoo.conf` | `/home/odoo/.config/odoo/odoo.conf` |
-| `./backups` | `/home/odoo/backups` |
-| `./task` | `/home/odoo/src/task` |
-| SSH keys | `/home/odoo/.ssh` |
-
-## Key paths
+## Key Paths
 
 | Path | Purpose |
 |------|---------|
-| `/opt/instploy/instploysh/bin/odoo-bin` | Odoo wrapper (use this) |
-| `/home/odoo/src/odoo/odoo-bin` | Real Odoo binary (exec target) |
-| `/opt/instploy/instploysh/lib/odoo_create_session.py` | Session creation |
-| `/home/odoo/data/filestore/$PGDATABASE` | Active filestore |
-| `/home/odoo/.config/odoo/odoo.conf` | Odoo config |
-| `/etc/supervisor/conf.d/*.conf` | Supervisor programs |
-| `/usr/local/bin/start_backup.py` | Scheduled backup |
-| `/usr/local/bin/startup.sh` | Container startup |
+| `/home/odoo/src/user` | Custom addons (deploy here) |
+| `/home/odoo/src/odoo` | Odoo core |
+| `/home/odoo/data/filestore/$PGDATABASE` | Attachments |
+| `/home/odoo/data/sessions/` | HTTP sessions |
+| `/home/odoo/.config/odoo/odoo.conf` | Odoo config (runtime-managed) |
+| `/opt/instploy/instploysh/bin/` | Canonical CLI wrappers |
+| `/opt/extra-packages` | Pip installs |
 
-## Data directory
+Full tree: see directory layout in prior reference — do not duplicate mount tables elsewhere.
 
-| Path | Purpose |
-|------|---------|
-| `/home/odoo/data` | Odoo `--data-dir` |
-| `/home/odoo/data/filestore/<PGDATABASE>` | Attachments |
-| `/home/odoo/data/sessions/` | Web session files |
+---
 
-After DB import, filestore lands at `/home/odoo/data/filestore/<db_name>`.
+## Addons-Path (runtime-owned)
 
-## Addons-path resolution
+Resolved by `odoo-bin` wrapper via `odoo_utils.get_odoo_args()`:
 
-`odoo-bin` wrapper calls `odoo_utils.get_odoo_args()`:
+1. `ADDONS_PATH` env + core paths
+2. Valid paths only (`__manifest__.py` present)
+3. Nested discovery under `/home/odoo/src/user`
+4. Enterprise/themes if `ENTERPRISE=true`
 
-1. Parse `ADDONS_PATH` env (comma-separated)
-2. Always include: `/home/odoo/src/odoo/addons`, `/home/odoo/src/odoo/odoo/addons`
-3. Include path only if it contains valid addon (`__manifest__.py` in subdirectory)
-4. Recursively discover nested parents under `/home/odoo/src/user`
-5. If `ENTERPRISE=true`: add `/home/odoo/src/enterprise`, `/home/odoo/src/themes` when valid
-6. Fallback: core paths only
-
-Verify resolved path:
+Verify (do not construct):
 
 ```bash
 grep "Final addons-path" /home/odoo/logs/startup.log
-```
-
-## Inspection commands
-
-```bash
 find /home/odoo/src/user -name __manifest__.py | head -20
-du -sh /home/odoo/data/filestore/$PGDATABASE
-ls /home/odoo/data/sessions/ 2>/dev/null | wc -l
-ls -la /home/odoo/src/odoo/odoo-bin
-ss -tlnp | grep -E '8069|9069|8072|9072'
 ```
 
-## pip installs
+---
+
+## Investigation Priority
+
+1. `__manifest__.py` exists under `/home/odoo/src/user`
+2. `grep addons-path startup.log`
+3. `ENTERPRISE` env if enterprise module expected
+4. `odoo-bin-wrapper.log`
+
+---
+
+## Anti-Patterns
+
+| Violation | Regenerate as |
+|-----------|---------------|
+| `--addons-path=/custom/...` | Deploy to `/home/odoo/src/user`; restart |
+| Edit `odoo.conf` addons manually | Let wrapper resolve; check startup.log |
+| Pip to system site-packages | `pip3 install --target=/opt/extra-packages` |
+
+---
+
+## Verification
 
 ```bash
-pip3 install --target=/opt/extra-packages <package>
+grep "Final addons-path" /home/odoo/logs/startup.log
+find /home/odoo/src/user -name __manifest__.py -path "*<module>*"
 ```
 
-`PIP_TARGET` and `PYTHONPATH` set in `/etc/profile.d/instploy.sh`.
+Volume mounts: typical `./addons` → `/home/odoo/src/user` (platform-managed).

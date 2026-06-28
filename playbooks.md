@@ -1,115 +1,89 @@
 # Execution Playbooks
 
-Deterministic sequences. Every playbook ends with verification. Commands defined in [commands.md](commands.md).
+Deterministic sequences. Every playbook: **Commands → Verification → Expected Result → Failure Recovery → Rollback**.
+
+Violations: [SKILL.md](SKILL.md#runtime-contract-violations). Canonical APIs: [SKILL.md](SKILL.md#canonical-apis).
+
+---
 
 ## Orient
 
-**Goal:** Establish container state before any operation.
-
-**Prerequisites:** Shell access as `odoo`.
+**Commands:**
 
 ```bash
 echo "DB=$PGDATABASE STAGE=$ODOO_STAGE VERSION=$ODOO_VERSION APP=$app"
-echo "HOST=$PGHOST PORT=${PGPORT:-${PGDBPORT:-5432}} USER=$POSTGRES_USER"
 supervisorctl status
 curl -s http://127.0.0.1/health
-psql -c "SELECT 1 AS ok;"
+psql -c "SELECT 1;"
 ```
 
-**Verification:** All services RUNNING (or odooB STOPPED is normal), health=`healthy`, psql returns `ok`.
+**Verification:** odooA RUNNING, health=`healthy`, psql exit 0.
+
+**Expected:** Container ready for operations.
+
+**Failure recovery:** [troubleshooting.md](troubleshooting.md)
 
 ---
 
-## Install module
+## Install Module
 
-**Goal:** Install Odoo module `<module>` into current database.
+**Goal:** Install `<module>`.
 
-**Prerequisites:** Orient complete. Module exists in addons-path. State=`uninstalled` or absent from catalog.
+**Prerequisites:** Orient. Module in `/home/odoo/src/user` with `__manifest__.py`.
 
 **Commands:**
 
 ```bash
-# If not in catalog:
+psql -c "SELECT name, state FROM ir_module_module WHERE name='<module>';"
+# if not in catalog:
 odoo-bin -u base --stop-after-init --logfile=
-
-# Install:
 odoo-bin -i <module> --stop-after-init --logfile=/home/odoo/logs/install.log
-```
-
-**Monitor errors:**
-
-```bash
-grep -iE "error|critical|traceback|failed" /home/odoo/logs/install.log | tail -20
+grep -iE "error|critical|traceback" /home/odoo/logs/install.log | tail -20 || true
 ```
 
 **Verification:**
 
 ```bash
-psql -c "SELECT name, state FROM ir_module_module WHERE name='<module>';"   # state=installed
+psql -c "SELECT name, state FROM ir_module_module WHERE name='<module>';"  # installed
 instploysh-restart http
 curl -s -o /dev/null -w "%{http_code}" http://127.0.0.1:8069/web/login
 curl -s http://127.0.0.1/health
 ```
 
-**Rollback:** Uninstall via `odoo-bin shell`: `env['ir.module.module'].search([('name','=','<module>')]).button_immediate_uninstall()` then `env.cr.commit()`. Or restore from backup.
+**Expected:** state=`installed`, HTTP 200/303, no critical in log.
 
-**Common failures:**
+**Failure recovery:** Read traceback → fix code/XML/deps → re-run. [troubleshooting.md#module-installupgrade-fails](troubleshooting.md)
 
-| Failure | Fix |
-|---------|-----|
-| Module not found | Check addons-path in `startup.log`; verify `__manifest__.py` in `/home/odoo/src/user` |
-| ParseError | Fix XML in module; re-run install |
-| ImportError | `pip3 install --target=/opt/extra-packages <dep>` |
-| Registry failed | Read full traceback; fix migration/SQL |
-
-**Expected output:** Exit 0. No critical/traceback in log. State=`installed`.
+**Rollback:** Uninstall via `odoo-bin shell` or DB restore.
 
 ---
 
-## Upgrade module
+## Upgrade Module
 
-**Goal:** Upgrade module `<module>` after code change.
-
-**Prerequisites:** Orient complete. Code deployed to `/home/odoo/src/user`. State=`installed`.
+**Goal:** Upgrade `<module>` after code deploy.
 
 **Commands:**
 
 ```bash
+psql -c "SELECT name, state FROM ir_module_module WHERE name='<module>';"
 odoo-update <module>
-# or with log capture:
-odoo-bin -u <module> --stop-after-init --logfile=/home/odoo/logs/update.log
-```
-
-**Monitor errors:**
-
-```bash
-grep -iE "error|critical|traceback|failed" /home/odoo/logs/update.log | tail -20
-# live alternative:
-tail -n 0 -f /home/odoo/logs/odoo.log | grep -iE "error|critical|traceback"
-```
-
-**Verification:**
-
-```bash
-psql -c "SELECT name, state, latest_version FROM ir_module_module WHERE name='<module>';"
+grep -iE "error|critical|traceback" /home/odoo/logs/odoo.log | tail -20 || true
 instploysh-restart http
-curl -s -o /dev/null -w "%{http_code}" http://127.0.0.1:8069/web/login
-curl -s http://127.0.0.1/health
 ```
 
-**Rollback:** Revert code in `/home/odoo/src/user`; `odoo-update <module>` with previous version. Or DB restore.
+**Verification:** Same as install.
 
-**Common failures:** Same as install-module. Additionally: migration script errors in upgrade hooks.
+**Expected:** `latest_version` updated, HTTP healthy.
 
-**Expected output:** Exit 0. `latest_version` updated. HTTP 200/303.
+**Failure recovery:** STOP on traceback; do not restart until fixed.
+
+**Rollback:** Revert code + `odoo-update` or DB restore.
 
 ---
 
 ## Restart HTTP
 
-**Goal:** Zero-downtime Odoo HTTP restart (blue/green).
-
-**Prerequisites:** Orient complete. No active install/upgrade on odooB.
+**Goal:** Zero-downtime Odoo HTTP restart.
 
 **Commands:**
 
@@ -120,32 +94,52 @@ instploysh-restart http
 **Verification:**
 
 ```bash
-supervisorctl status odooA    # RUNNING
-supervisorctl status odooB    # STOPPED (normal after completion)
+supervisorctl status odooA
+supervisorctl status odooB    # STOPPED after completion
 curl -s http://127.0.0.1/health
-curl -s -o /dev/null -w "odooA: %{http_code}\n" http://127.0.0.1:8069/web/login
+curl -s -o /dev/null -w "%{http_code}" http://127.0.0.1:8069/web/login
 psql -c "SELECT 1;"
 ```
 
-**Rollback:** If restart fails mid-swap, check nginx upstream in `/etc/nginx/conf.d/default.conf`. `supervisorctl signal HUP nginx` after manual fix.
+**Expected:** `Blue/Green restart completed`, HTTP 200/303.
 
-**Common failures:**
+**Failure recovery:** [troubleshooting.md#odoo-wont-start](troubleshooting.md). If nginx swap failed, config auto-rolled back.
 
-| Failure | Fix |
-|---------|-----|
-| odooB timeout | Check `odoo-error.log`; fix startup issue; `supervisorctl stop odooB` |
-| nginx switch failed | Config rolled back automatically; check `nginx-error.log` |
-| odooA won't start | [troubleshooting.md](troubleshooting.md#odoo-wont-start) |
-
-**Expected output:** `Blue/Green restart completed successfully in Xs`
+**Rollback:** `instploysh-restart http` retry after fixing root cause.
 
 ---
 
-## Import database
+## Create Session
 
-**Goal:** Replace current database and filestore from backup.
+**Goal:** Passwordless session + JSON-RPC ORM access.
 
-**Prerequisites:** Orient complete. **Explicit user confirmation required.**
+**Rules:** Never password auth. Never XML-RPC. See [jsonrpc.md](jsonrpc.md).
+
+**Commands:**
+
+```bash
+psql -c "SELECT id, login FROM res_users WHERE active AND share=false ORDER BY id LIMIT 10;"
+SID=$(python3 /opt/instploy/instploysh/lib/odoo_create_session.py <uid> 2>&1 | grep -o '{.*}' \
+  | python3 -c "import sys,json; print(json.load(sys.stdin)['session_id'])")
+curl -s -b "session_id=$SID" http://127.0.0.1/web/session/get_session_info | python3 -m json.tool
+curl -s http://127.0.0.1/web/dataset/call_kw \
+  -H "Content-Type: application/json" -b "session_id=$SID" \
+  -d '{"jsonrpc":"2.0","method":"call","params":{"model":"res.users","method":"search_count","args":[[]],"kwargs":{}}}'
+```
+
+**Verification:** Session info has uid; search_count returns integer.
+
+**Expected:** Valid JSON session; ORM call succeeds.
+
+**Failure recovery:** [jsonrpc.md#failure-handling](jsonrpc.md). Never fall back to password.
+
+**Rollback:** N/A.
+
+---
+
+## Import Database
+
+**Goal:** Restore from backup. **Requires explicit user confirmation.**
 
 **Commands:**
 
@@ -158,148 +152,48 @@ instploysh-restart http
 
 ```bash
 psql -c "SELECT latest_version FROM ir_module_module WHERE name='base';"
-ls /home/odoo/data/filestore/$PGDATABASE | head -5
 curl -s http://127.0.0.1/health
 ```
 
-**Rollback:** None in-place. Requires another backup restore.
+**Expected:** `Finished.` exit 0.
 
-**Common failures:**
+**Failure recovery:** Check import log. Invalid format → correct backup type.
 
-| Failure | Fix |
-|---------|-----|
-| InvalidDumpError | Use Odoo manager `.zip` or instploy plain format |
-| Custom format dump | Convert to plain SQL dump |
-| psql restore errors | Check filtered warnings in import log |
-
-**Expected output:** `Finished.` exit 0.
+**Rollback:** Another backup restore only.
 
 ---
 
-## Create session
+## Inspect Logs
 
-**Goal:** Obtain passwordless authenticated Odoo session and make ORM calls via JSON-RPC.
+**Goal:** Find root cause of failure.
 
-**Prerequisites:** Orient complete. Run inside container.
-
-**Rules:** Never guess passwords (`admin`/`admin`). Never use XML-RPC. Session is created passwordless from the DB registry.
-
-**Step 1 — Find a real user id (do not assume uid 2):**
+**Commands:** Use investigation priority from [logs.md](logs.md#investigation-priority).
 
 ```bash
-psql -c "SELECT id, login FROM res_users WHERE active AND share=false ORDER BY id LIMIT 10;"
+grep -iE "error|critical|traceback" <relevant-log> | tail -40
 ```
 
-**Step 2 — Create session and extract sid:**
+**Verification:** Actionable error identified.
 
-```bash
-SID=$(python3 /opt/instploy/instploysh/lib/odoo_create_session.py <uid> 2>&1 | grep -o '{.*}' \
-  | python3 -c "import sys,json; print(json.load(sys.stdin)['session_id'])")
-```
+**Expected:** Specific module/file/line in traceback.
 
-**Step 3 — JSON-RPC ORM call (no password):**
-
-```bash
-curl -s http://127.0.0.1/web/dataset/call_kw \
-  -H "Content-Type: application/json" \
-  -b "session_id=$SID" \
-  -d '{"jsonrpc":"2.0","method":"call","params":{
-        "model":"res.users","method":"search_read",
-        "args":[[],["login","name"]],"kwargs":{"limit":5}}}' | python3 -m json.tool
-```
-
-**Verification:**
-
-```bash
-curl -s -b "session_id=$SID" http://127.0.0.1/web/session/get_session_info | python3 -m json.tool
-```
-
-**Rollback:** N/A (stateless session creation).
-
-**Common failures:**
-
-| Failure | Fix |
-|---------|-----|
-| `User with ID N not found` | Use a real uid from `res_users` |
-| DB connection error | Check env vars + `psql -c "SELECT 1;"` |
-| Empty JSON | Check `manager.log` for exception |
-| 401 on call_kw | Recreate session; ensure cookie sent with `-b` |
-
-**Expected output:** Session JSON `{"session_id":"...","user_id":N,...}`; ORM call returns records.
-
-**Security:** Never log `session_id` or attempt password authentication.
+**Failure recovery:** Apply subsystem playbook after fix.
 
 ---
 
-## Inspect logs
-
-**Goal:** Find errors related to a failed operation.
-
-**Prerequisites:** Know symptom or recent operation type.
-
-**Commands:**
-
-```bash
-# By scenario — see logs.md chain
-tail -n 50 /home/odoo/logs/supervisor/odoo-error.log
-tail -n 50 /home/odoo/logs/odoo-bin-wrapper.log
-grep -iE "error|critical|traceback" /home/odoo/logs/odoo.log | tail -40
-grep "addons-path\|Database" /home/odoo/logs/startup.log | tail -20
-```
-
-**Verification:** Root cause identified in traceback or error line.
-
-**Expected output:** Actionable error message with file/module reference.
-
----
-
-## Recover failed deployment
-
-**Goal:** Restore service after failed module deploy or restart.
-
-**Prerequisites:** Orient complete. Failure already observed.
+## Recover Failed Deployment
 
 **Decision:**
 
 ```
 Install/upgrade failed?
-├─ YES → Read traceback in odoo.log or install.log
-│        ├─ Fix code/XML/deps
-│        ├─ Re-run odoo-update <module>
-│        └─ If unrecoverable: instploysh-import-database (with user approval)
+├─ YES → read traceback → fix → re-run odoo-update / odoo-bin -i
 └─ Restart failed?
          ├─ supervisorctl status
-         ├─ Read odoo-error.log → odoo-bin-wrapper.log
-         ├─ Fix root cause
-         └─ instploysh-restart http
+         ├─ logs per [logs.md](logs.md)
+         └─ instploysh-restart http after fix
 ```
 
-**Commands:**
+**Verification:** Full orient checklist passes.
 
-```bash
-supervisorctl status
-tail -n 50 /home/odoo/logs/supervisor/odoo-error.log
-grep -iE "error|critical|traceback" /home/odoo/logs/odoo.log | tail -30
-# after fix:
-instploysh-restart http
-```
-
-**Verification:** Full orient verification passes.
-
-**Rollback:** DB restore if module migration corrupted data.
-
----
-
-## Full deploy loop
-
-Checklist for code deploy → upgrade → restart:
-
-```
-[ ] Orient
-[ ] Code in /home/odoo/src/user with __manifest__.py
-[ ] psql: module state=installed
-[ ] odoo-update <module>
-[ ] grep errors in log
-[ ] instploysh-restart http
-[ ] curl /health + /web/login
-```
+**Rollback:** DB restore if data corrupted.
