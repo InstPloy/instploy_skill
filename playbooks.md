@@ -178,23 +178,39 @@ curl -s http://127.0.0.1/health
 
 ## Create session
 
-**Goal:** Obtain authenticated Odoo HTTP session for user `<uid>`.
+**Goal:** Obtain passwordless authenticated Odoo session and make ORM calls via JSON-RPC.
 
-**Prerequisites:** Orient complete. User exists and is active.
+**Prerequisites:** Orient complete. Run inside container.
 
-**Commands:**
+**Rules:** Never guess passwords (`admin`/`admin`). Never use XML-RPC. Session is created passwordless from the DB registry.
+
+**Step 1 — Find a real user id (do not assume uid 2):**
 
 ```bash
-psql -c "SELECT id, login FROM res_users WHERE active ORDER BY id LIMIT 10;"
-python3 /opt/instploy/instploysh/lib/odoo_create_session.py <uid> 2>&1 | grep -o '{.*}'
+psql -c "SELECT id, login FROM res_users WHERE active AND share=false ORDER BY id LIMIT 10;"
+```
+
+**Step 2 — Create session and extract sid:**
+
+```bash
+SID=$(python3 /opt/instploy/instploysh/lib/odoo_create_session.py <uid> 2>&1 | grep -o '{.*}' \
+  | python3 -c "import sys,json; print(json.load(sys.stdin)['session_id'])")
+```
+
+**Step 3 — JSON-RPC ORM call (no password):**
+
+```bash
+curl -s http://127.0.0.1/web/dataset/call_kw \
+  -H "Content-Type: application/json" \
+  -b "session_id=$SID" \
+  -d '{"jsonrpc":"2.0","method":"call","params":{
+        "model":"res.users","method":"search_read",
+        "args":[[],["login","name"]],"kwargs":{"limit":5}}}' | python3 -m json.tool
 ```
 
 **Verification:**
 
 ```bash
-SESSION=$(python3 /opt/instploy/instploysh/lib/odoo_create_session.py <uid> 2>&1 | grep -o '{.*}')
-echo "$SESSION" | python3 -c "import sys,json; d=json.load(sys.stdin); assert 'session_id' in d"
-SID=$(echo "$SESSION" | python3 -c "import sys,json; print(json.load(sys.stdin)['session_id'])")
 curl -s -b "session_id=$SID" http://127.0.0.1/web/session/get_session_info | python3 -m json.tool
 ```
 
@@ -204,13 +220,14 @@ curl -s -b "session_id=$SID" http://127.0.0.1/web/session/get_session_info | pyt
 
 | Failure | Fix |
 |---------|-----|
-| `User with ID N not found` | Verify uid in `res_users` |
+| `User with ID N not found` | Use a real uid from `res_users` |
 | DB connection error | Check env vars + `psql -c "SELECT 1;"` |
 | Empty JSON | Check `manager.log` for exception |
+| 401 on call_kw | Recreate session; ensure cookie sent with `-b` |
 
-**Expected output:** `{"session_id":"...","login":"...","user_id":N,"db":"..."}`
+**Expected output:** Session JSON `{"session_id":"...","user_id":N,...}`; ORM call returns records.
 
-**Security:** Never log `session_id` in chat output.
+**Security:** Never log `session_id` or attempt password authentication.
 
 ---
 

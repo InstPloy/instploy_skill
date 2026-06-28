@@ -16,6 +16,13 @@ Canonical Nginx routing reference.
 | `/hermes/` | `hermes-agent` | 8642 | Platform-managed auth |
 | `/health` | nginx direct | — | Returns `200 healthy` |
 | `/web/database/manager` | `odoo` | 8069 | Disabled in prod via `--no-database-list` |
+| `/web/dataset/call_kw` | `odoo` | 8069 | JSON-RPC ORM (use with `session_id` cookie) |
+
+## ORM over HTTP
+
+Canonical: passwordless session + JSON-RPC `/web/dataset/call_kw`. See [odoo-runtime.md](odoo-runtime.md#programmatic--rpc-access-canonical).
+
+Forbidden: XML-RPC (`/xmlrpc/2/*`), `/web/session/authenticate` with password, password-based `/jsonrpc`.
 
 Config: `/etc/nginx/conf.d/default.conf`, `/etc/nginx/nginx.conf`
 

@@ -22,15 +22,16 @@ env.cr.commit()
 
 Warning: uncommitted changes in open shell can block the database.
 
-## Odoo RPC
+## Programmatic / RPC access (CANONICAL)
 
-```bash
-/opt/instploy/instploysh/bin/odoo-rpc
-```
+Rule: obtain access **passwordless** via `odoo_create_session.py`. The script reads the DB registry and computes the session token directly — no login password required.
 
-Internal use. Supervisor-managed. Dispatches RPC as superuser. Do not run manually unless debugging.
+Forbidden:
+- Never guess passwords (`admin`/`admin`). Each database has unique platform-generated credentials; defaults do not exist.
+- Never use XML-RPC. Use JSON-RPC web endpoints with the session cookie.
+- Never call `/web/session/authenticate`, `/xmlrpc/2/common`, or `/jsonrpc` with a password for ORM access.
 
-## Web session creation
+### Step 1 — Create session (passwordless)
 
 Script: `/opt/instploy/instploysh/lib/odoo_create_session.py`
 
@@ -41,20 +42,54 @@ python3 /opt/instploy/instploysh/lib/odoo_create_session.py <user_id> 2>&1 | gre
 | Attribute | Value |
 |-----------|-------|
 | Safety | Caution (creates real auth session) |
+| Auth | None required (DB registry + token compute) |
 | Output | JSON: `session_id`, `login`, `user_id`, `db` |
 | Log | `/home/odoo/logs/manager.log` (sid masked) |
 | Cookie | Use `session_id` value as HTTP cookie |
+| Scope | Run inside container; sid valid for that Odoo instance |
 
-Success: `{"session_id":"<sid>","login":"admin","user_id":2,"db":"master"}`
+Success: `{"session_id":"<sid>","login":"admin","user_id":2,"db":"<db>"}`
 Error: `{"error":"User with ID 99 not found"}`
 
-HTTP usage:
+Find a valid user id first: see [postgresql.md](postgresql.md#user-lookup). Do not assume uid 2 exists or is desired.
+
+### Step 2 — Extract sid
 
 ```bash
-SESSION=$(python3 /opt/instploy/instploysh/lib/odoo_create_session.py 2 2>&1 | grep -o '{.*}')
-SID=$(echo "$SESSION" | python3 -c "import sys,json; print(json.load(sys.stdin)['session_id'])")
+SID=$(python3 /opt/instploy/instploysh/lib/odoo_create_session.py <uid> 2>&1 | grep -o '{.*}' \
+  | python3 -c "import sys,json; print(json.load(sys.stdin)['session_id'])")
+```
+
+### Step 3 — JSON-RPC ORM call (session cookie, no password)
+
+Use the web JSON endpoint `/web/dataset/call_kw` with the `session_id` cookie:
+
+```bash
+curl -s http://127.0.0.1/web/dataset/call_kw \
+  -H "Content-Type: application/json" \
+  -b "session_id=$SID" \
+  -d '{"jsonrpc":"2.0","method":"call","params":{
+        "model":"res.users","method":"search_read",
+        "args":[[],["login","name"]],"kwargs":{"limit":5}}}' | python3 -m json.tool
+```
+
+Generic ORM template:
+
+```json
+{"jsonrpc":"2.0","method":"call","params":{
+  "model":"<model>","method":"<method>",
+  "args":[<positional>],"kwargs":{<keyword>}}}
+```
+
+### Verify session
+
+```bash
 curl -s -b "session_id=$SID" http://127.0.0.1/web/session/get_session_info | python3 -m json.tool
 ```
+
+### Internal RPC server
+
+`/opt/instploy/instploysh/bin/odoo-rpc` — supervisor-managed, dispatches as superuser. Do not run manually unless debugging.
 
 Playbook: [playbooks.md](playbooks.md#create-session)
 
@@ -129,9 +164,11 @@ Not run directly. Used by wrappers:
 ## Access decision
 
 ```
-SQL only        → psql ([postgresql.md](postgresql.md))
-ORM/Python      → odoo-bin shell
-HTTP API        → odoo_create_session.py
-Browser UI      → session_id cookie
-Notebook        → /instploy/editor/
+SQL only          → psql ([postgresql.md](postgresql.md))
+ORM (in-process)  → odoo-bin shell
+ORM (RPC)         → odoo_create_session.py + JSON-RPC /web/dataset/call_kw
+Browser UI        → session_id cookie
+Notebook          → /instploy/editor/
 ```
+
+Never: XML-RPC, or any password-based authentication.

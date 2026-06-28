@@ -52,33 +52,40 @@ Highest priority. Apply before every action.
 - Prefer `instploysh-restart http` over `supervisorctl restart odooA` unless user explicitly requests direct restart.
 - Verify after every mutating operation (see [Verification](#verification)).
 - Use `curl -s http://127.0.0.1/health` after any HTTP-affecting change.
+- Connect to PostgreSQL by typing bare `psql` — never pass host, port, user, database, password, or any IP. The shell function reads all of it from the environment ([postgresql.md](postgresql.md#connection)).
 - Read the smallest relevant log first (see [logs.md](logs.md) log chain).
 - Use `--stop-after-init --logfile=` for one-off install/upgrade operations.
 - Treat `session_id` output and `POSTGRES_PASSWORD` as sensitive; never echo in chat.
 - Test permissions with regular users when possible; avoid defaulting to admin (uid 2).
 - Reference canonical sections; do not duplicate command/path tables inline.
+- For Odoo programmatic/RPC access, ALWAYS create a passwordless session via `odoo_create_session.py`, then call JSON-RPC `/web/dataset/call_kw` with the `session_id` cookie. See [odoo-runtime.md](odoo-runtime.md#programmatic--rpc-access-canonical).
+- Look up a valid `user_id` in `res_users` before creating a session (see [postgresql.md](postgresql.md#user-lookup)).
 
 ### Never
 
 - Never expose passwords, session tokens, or platform secrets in output.
-- Never assume PostgreSQL is on `localhost`; use `PGHOST` from env.
+- Never assume PostgreSQL is on `localhost`; the env-aware `psql` already targets `PGHOST`. Never supply host/db/credentials manually.
 - Never run `instploysh-import-database` without explicit user confirmation (destructive).
 - Never run `odoo-update all` without explicit user confirmation (expensive).
 - Never run install/upgrade on `odooB` during an active `instploysh-restart` swap.
 - Never bypass or document Manager/Hermes authentication mechanisms.
 - Never use `supervisorctl restart` for routine Odoo reloads when `instploysh-restart` is available.
 - Never skip verification at the end of a playbook.
+- Never guess Odoo login passwords (e.g. `admin`/`admin`). Databases use unique platform-generated credentials; defaults do not exist.
+- Never use XML-RPC, `/web/session/authenticate`, `/xmlrpc/2/common`, or password-based `/jsonrpc` for ORM access. Use the passwordless session + JSON-RPC web endpoint instead.
 
 ### Prefer / Avoid
 
 | Prefer | Avoid |
 |--------|-------|
 | `odoo-update <mod>` | Raw `odoo-bin -u` unless install (`-i`) needed |
-| `psql` shell function | Manual `psql -h -U -d` with hardcoded values |
+| Bare `psql` (env-aware, no args) | Manual `psql -h -U -d` or any hardcoded host/db/credentials |
 | `instploysh-restart http` | Killing Odoo processes directly |
 | `grep` on specific log file | Reading entire large log files |
 | `odoo-bin -i/-u ... --stop-after-init` | Starting Odoo manually for one-off DB ops |
 | Checking `ir_module_module.state` after module ops | Assuming success from exit code alone |
+| Passwordless session + JSON-RPC `/web/dataset/call_kw` | XML-RPC or any password-based auth |
+| Looking up real uid in `res_users` | Assuming `admin`/`admin` or uid 2 |
 
 ### If / Otherwise
 
@@ -88,7 +95,7 @@ Highest priority. Apply before every action.
 | Module not in catalog | `odoo-bin -u base --stop-after-init --logfile=` | Proceed with install/upgrade |
 | Install/upgrade errors in log | Stop; read traceback; do not restart | Verify state + restart |
 | `psql` fails | Check env vars + `startup.log` | Proceed with Odoo ops |
-| User needs HTTP auth | `odoo_create_session.py` playbook | Do not guess credentials |
+| User needs HTTP/RPC auth | `odoo_create_session.py` + JSON-RPC `/web/dataset/call_kw` | Never guess passwords or use XML-RPC |
 | Custom code deployed | `odoo-update <mod>` then `instploysh-restart http` | Restart alone is insufficient |
 | Log file missing | Check legacy path in [logs.md](logs.md#legacy-paths) | Report both paths checked |
 
@@ -120,10 +127,11 @@ Need module change?
 ```
 Need data?
 ├─ SQL query → psql
-├─ ORM/Python → odoo-bin shell
-├─ HTTP API → playbook: create-session
+├─ ORM in-process → odoo-bin shell
+├─ ORM via RPC → odoo_create_session.py + JSON-RPC /web/dataset/call_kw
 ├─ Browser UI → session_id cookie
 └─ Notebook → /instploy/editor/ (Odoo kernel)
+                 (never XML-RPC; never password auth)
 ```
 
 Full symptom trees: [troubleshooting.md](troubleshooting.md)
