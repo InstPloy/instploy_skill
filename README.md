@@ -38,4 +38,4 @@ Overrides generic Docker, PostgreSQL, Linux, Python, and Odoo knowledge.
 
 ## Author
 
-instploy — [https://instploy.com/](https://instploy.com/)
+instploy — [https://instploy.com](https://instploy.com)
