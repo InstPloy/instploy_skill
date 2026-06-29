@@ -38,4 +38,4 @@ Overrides generic Docker, PostgreSQL, Linux, Python, and Odoo knowledge.
 
 ## Author
 
-Rightechs Solutions — [https://www.rightechs.net/](https://www.rightechs.net/)
+instploy — [https://instploy.com/](https://instploy.com/)
